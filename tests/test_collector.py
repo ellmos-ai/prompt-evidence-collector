@@ -3,7 +3,7 @@
 import hashlib
 import json
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -41,6 +41,106 @@ def capture(collector, *, raw="streng privat", captured_at="2026-07-30T08:00:00Z
         source_locator_id="loc-" + "a" * 64,
         source_content_hash="b" * 64,
     )
+
+
+@dataclass(frozen=True)
+class Locator:
+    schema: str
+    provider_code: str
+    locator_id: str
+    source_uri: str
+    content_hash: str
+
+
+def locator_for(raw: str = "streng privat") -> Locator:
+    content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    locator_id = "loc-" + "c" * 64
+    return Locator(
+        schema="ellmos.prompt-evidence-locator.v2",
+        provider_code="clutch",
+        locator_id=locator_id,
+        source_uri=f"clutch-local://evidence/{locator_id}",
+        content_hash=content_hash,
+    )
+
+
+def test_capture_from_locator_verifies_and_projects_clutch_evidence(collector):
+    raw = "streng privat"
+    locator = locator_for(raw)
+
+    receipt = collector.capture_from_locator(
+        locator=locator,
+        resolve_content=lambda candidate: raw,
+        captured_at="2026-08-01T09:00:00Z",
+        sensitivity_code="private",
+        retention_code="local-review",
+    )
+
+    assert receipt.provider_code == "clutch"
+    assert receipt.origin_code == "clutch-session-store"
+    assert receipt.source_locator_id == locator.locator_id
+    assert receipt.source_content_hash == locator.content_hash
+    assert receipt.promotion_status == "not-reviewed"
+    assert collector.read_raw(
+        receipt.evidence_id,
+        expected_hash=locator.content_hash,
+    ) == raw
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", "ellmos.prompt-evidence-locator.v1"),
+        ("provider_code", "openai"),
+        ("locator_id", "not-opaque"),
+        ("source_uri", "file:///private/session.db"),
+        ("content_hash", "not-a-hash"),
+    ],
+)
+def test_capture_from_locator_rejects_untrusted_locator_before_resolve(
+    collector,
+    field,
+    value,
+):
+    locator = replace(locator_for(), **{field: value})
+    resolver_called = False
+
+    def resolver(candidate):
+        nonlocal resolver_called
+        resolver_called = True
+        return "streng privat"
+
+    with pytest.raises(EvidenceIntegrityError):
+        collector.capture_from_locator(
+            locator=locator,
+            resolve_content=resolver,
+            captured_at="2026-08-01T09:00:00Z",
+            sensitivity_code="private",
+            retention_code="local-review",
+        )
+    assert resolver_called is False
+
+
+def test_capture_from_locator_rejects_tampered_or_unavailable_content(collector):
+    locator = locator_for("expected")
+    with pytest.raises(EvidenceIntegrityError, match="hash mismatch"):
+        collector.capture_from_locator(
+            locator=locator,
+            resolve_content=lambda candidate: "tampered",
+            captured_at="2026-08-01T09:00:00Z",
+            sensitivity_code="private",
+            retention_code="local-review",
+        )
+    with pytest.raises(EvidenceNotFoundError, match="could not be resolved"):
+        collector.capture_from_locator(
+            locator=locator,
+            resolve_content=lambda candidate: (_ for _ in ()).throw(
+                RuntimeError("offline")
+            ),
+            captured_at="2026-08-01T09:00:00Z",
+            sensitivity_code="private",
+            retention_code="local-review",
+        )
 
 
 def test_capture_projects_only_codes_opaque_ids_and_hashes(collector):

@@ -6,11 +6,12 @@ from .collector import (
     EvidenceNotFoundError,
     PromptEvidenceCollector,
     PromptEvidenceError,
+    PromptEvidenceLocatorLike,
     PromptEvidenceReceipt,
     UnsafeEvidenceStoreError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AmbiguousEvidenceError",
@@ -18,6 +19,7 @@ __all__ = [
     "EvidenceNotFoundError",
     "PromptEvidenceCollector",
     "PromptEvidenceError",
+    "PromptEvidenceLocatorLike",
     "PromptEvidenceReceipt",
     "UnsafeEvidenceStoreError",
     "__version__",

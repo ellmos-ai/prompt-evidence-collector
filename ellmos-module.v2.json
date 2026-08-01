@@ -8,7 +8,8 @@
   "visibility": "private",
   "provides": [
     "evidence.prompt.local-store",
-    "evidence.receipt.hashed"
+    "evidence.receipt.hashed",
+    "evidence.consumer.locator"
   ],
   "requires": [],
   "optional": [],
@@ -39,5 +40,5 @@
     "repository": "https://github.com/ellmos-ai/prompt-evidence-collector",
     "path": "."
   },
-  "notes": "Standalone extraction from ellmos-core@03f6f58. Raw prompt/session text never leaves the local store; outbound artifacts are hashed receipts only. Default-passive: no scheduler, no network, no automatic promotion to any library or user decision (V4-08 contract)."
+  "notes": "Standalone extraction from ellmos-core@03f6f58. Raw prompt/session text never leaves the local store; outbound artifacts are hashed receipts only. A passive, fail-closed Clutch locator consumer is available; the caller supplies the local resolver. Default-passive: no scheduler, no network, no automatic promotion to any library or user decision (V4-08 contract)."
 }
