@@ -31,7 +31,7 @@ def collector(tmp_path, monkeypatch):
 
 
 def capture(collector, *, raw="streng privat", captured_at="2026-07-30T08:00:00Z"):
-    return collector.capture(
+    return collector._capture(
         provider_code="clutch",
         origin_code="clutch-session-store",
         captured_at=captured_at,
@@ -68,7 +68,7 @@ def test_capture_from_locator_verifies_and_projects_clutch_evidence(collector):
     raw = "streng privat"
     locator = locator_for(raw)
 
-    receipt = collector.capture_from_locator(
+    receipt = collector._capture_from_locator(
         locator=locator,
         resolve_content=lambda candidate: raw,
         captured_at="2026-08-01T09:00:00Z",
@@ -111,7 +111,7 @@ def test_capture_from_locator_rejects_untrusted_locator_before_resolve(
         return "streng privat"
 
     with pytest.raises(EvidenceIntegrityError):
-        collector.capture_from_locator(
+        collector._capture_from_locator(
             locator=locator,
             resolve_content=resolver,
             captured_at="2026-08-01T09:00:00Z",
@@ -124,7 +124,7 @@ def test_capture_from_locator_rejects_untrusted_locator_before_resolve(
 def test_capture_from_locator_rejects_tampered_or_unavailable_content(collector):
     locator = locator_for("expected")
     with pytest.raises(EvidenceIntegrityError, match="hash mismatch"):
-        collector.capture_from_locator(
+        collector._capture_from_locator(
             locator=locator,
             resolve_content=lambda candidate: "tampered",
             captured_at="2026-08-01T09:00:00Z",
@@ -132,7 +132,7 @@ def test_capture_from_locator_rejects_tampered_or_unavailable_content(collector)
             retention_code="local-review",
         )
     with pytest.raises(EvidenceNotFoundError, match="could not be resolved"):
-        collector.capture_from_locator(
+        collector._capture_from_locator(
             locator=locator,
             resolve_content=lambda candidate: (_ for _ in ()).throw(
                 RuntimeError("offline")
@@ -299,7 +299,7 @@ def test_unbounded_receipt_fields_are_rejected(collector, field, value):
     }
     values[field] = value
     with pytest.raises(ValueError):
-        collector.capture(**values)
+        collector._capture(**values)
 
 
 def test_missing_and_ambiguous_receipts_fail_closed(collector):
