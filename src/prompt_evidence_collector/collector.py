@@ -17,6 +17,18 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import UUID
 
+from .authorization import (
+    AuthorizedCaptureResult,
+    CaptureGrant,
+    CaptureGrantLedger,
+    CaptureGrantVerifier,
+    CaptureRecoveryRequiredError,
+    ResolverRuntimeReceipt,
+    attempt_id,
+    build_consumption_receipt,
+    utc_text,
+)
+
 
 class PromptEvidenceError(RuntimeError):
     """Basisklasse für sichere Collector-Fehler."""
@@ -183,7 +195,7 @@ class PromptEvidenceCollector:
         self._receipt_root = self.receipt_dir.resolve(strict=True)
         self._validate_current_store()
 
-    def capture(
+    def _capture(
         self,
         *,
         provider_code: str,
@@ -197,6 +209,45 @@ class PromptEvidenceCollector:
         promotion_status: str = "not-reviewed",
     ) -> PromptEvidenceReceipt:
         """Erfasst Rohtext; das zurückgegebene Receipt bleibt cloud-safe."""
+        receipt = self._build_evidence_receipt(
+            provider_code=provider_code,
+            origin_code=origin_code,
+            captured_at=captured_at,
+            raw_content=raw_content,
+            sensitivity_code=sensitivity_code,
+            retention_code=retention_code,
+            source_locator_id=source_locator_id,
+            source_content_hash=source_content_hash,
+            promotion_status=promotion_status,
+        )
+        self._write_once(
+            self.raw_dir / f"{receipt.evidence_id}.txt",
+            raw_content,
+            expected_parent=self._raw_root,
+            suffix=".txt",
+        )
+        self._write_once(
+            self.receipt_dir / f"{receipt.evidence_id}.json",
+            json.dumps(receipt.to_dict(), ensure_ascii=False, sort_keys=True, indent=2),
+            expected_parent=self._receipt_root,
+            suffix=".json",
+        )
+        return receipt
+
+    def _build_evidence_receipt(
+        self,
+        *,
+        provider_code: str,
+        origin_code: str,
+        captured_at: str,
+        raw_content: str,
+        sensitivity_code: str,
+        retention_code: str,
+        source_locator_id: str | None = None,
+        source_content_hash: str | None = None,
+        promotion_status: str = "not-reviewed",
+    ) -> PromptEvidenceReceipt:
+        """Validate capture data and build a receipt without filesystem writes."""
         self._validate_current_store()
         self._validate_codes(
             provider_code=provider_code,
@@ -224,7 +275,7 @@ class PromptEvidenceCollector:
             source_content_hash=source_content_hash,
             content_hash=content_hash,
         )
-        receipt = PromptEvidenceReceipt(
+        return PromptEvidenceReceipt(
             schema=self.SCHEMA,
             evidence_id=evidence_id,
             provider_code=provider_code,
@@ -238,21 +289,8 @@ class PromptEvidenceCollector:
             source_locator_id=source_locator_id,
             source_content_hash=source_content_hash,
         )
-        self._write_once(
-            self.raw_dir / f"{evidence_id}.txt",
-            raw_content,
-            expected_parent=self._raw_root,
-            suffix=".txt",
-        )
-        self._write_once(
-            self.receipt_dir / f"{evidence_id}.json",
-            json.dumps(receipt.to_dict(), ensure_ascii=False, sort_keys=True, indent=2),
-            expected_parent=self._receipt_root,
-            suffix=".json",
-        )
-        return receipt
 
-    def capture_from_locator(
+    def _capture_from_locator(
         self,
         *,
         locator: PromptEvidenceLocatorLike,
@@ -267,7 +305,9 @@ class PromptEvidenceCollector:
         Der Aufrufer stellt den lokalen Resolver bereit. Der Collector öffnet
         weder Netzwerkverbindungen noch Provider-Datenbanken und aktiviert
         keinen Hintergrundlauf. Schema, URI und Hash werden vor dem Write
-        fail-closed geprüft.
+        fail-closed geprüft. Diese Low-Level-API ist ausschließlich für lokale
+        Imports und isolierte Tests bestimmt. Live-Capture muss
+        ``authorize_and_capture_from_locator`` verwenden.
         """
         self._validate_current_store()
         self._validate_codes(
@@ -282,8 +322,140 @@ class PromptEvidenceCollector:
             raise ValueError("resolve_content must be callable")
 
         self._validate_clutch_locator(locator)
+        raw_content = self._resolve_locator_content(locator, resolve_content)
+
+        return self._capture(
+            provider_code="clutch",
+            origin_code="clutch-session-store",
+            captured_at=captured_at,
+            raw_content=raw_content,
+            sensitivity_code=sensitivity_code,
+            retention_code=retention_code,
+            source_locator_id=locator.locator_id,
+            source_content_hash=locator.content_hash,
+            promotion_status=promotion_status,
+        )
+
+    def authorize_and_capture_from_locator(
+        self,
+        *,
+        locator: PromptEvidenceLocatorLike,
+        grant: CaptureGrant | dict[str, Any],
+        resolver_runtime_receipt: ResolverRuntimeReceipt | dict[str, Any],
+    ) -> AuthorizedCaptureResult:
+        """Erfasst genau einen Locator mit signiertem, one-shot Grant.
+
+        Der Grant und das immutable Resolver-Receipt werden gegen den privaten
+        lokalen Trust-Store geprüft. Die Replay-Reservierung erfolgt atomar vor
+        dem ersten Resolveraufruf. Prediction oder ein caller-supplied Claim
+        allein erteilen keine Autorität.
+        """
+        parsed_grant = CaptureGrant.from_dict(
+            grant.to_dict() if isinstance(grant, CaptureGrant) else grant
+        )
+        runtime_receipt = ResolverRuntimeReceipt.from_dict(
+            resolver_runtime_receipt.to_dict()
+            if isinstance(resolver_runtime_receipt, ResolverRuntimeReceipt)
+            else resolver_runtime_receipt
+        )
+        now = datetime.now(UTC)
+        captured_at = utc_text(now)
+        self._validate_current_store()
+        verifier = CaptureGrantVerifier(self._store_root)
+        verified = verifier.verify(
+            grant=parsed_grant,
+            runtime_receipt=runtime_receipt,
+            locator=locator,
+            now=now,
+        )
+
+        ledger = CaptureGrantLedger(self._store_root)
+        capture_attempt_id = attempt_id(parsed_grant.grant_id, captured_at)
+        ledger.reserve(
+            grant_id=parsed_grant.grant_id,
+            grant_hash=hashlib.sha256(
+                json.dumps(
+                    parsed_grant.to_dict(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            reserved_at=captured_at,
+            attempt_id=capture_attempt_id,
+        )
+        stage: Path | None = None
         try:
-            raw_content = resolve_content(locator)
+            policy = parsed_grant.capture_policy
+            raw_content = self._resolve_locator_content(
+                verified.locator,
+                verified.resolver,
+            )
+            evidence_receipt = self._build_evidence_receipt(
+                provider_code="clutch",
+                origin_code="clutch-session-store",
+                captured_at=captured_at,
+                raw_content=raw_content,
+                sensitivity_code=policy["sensitivity_code"],
+                retention_code=policy["retention_code"],
+                source_locator_id=verified.locator.locator_id,
+                source_content_hash=verified.locator.content_hash,
+                promotion_status=policy["promotion_status"],
+            )
+            consumption_receipt = build_consumption_receipt(
+                grant=parsed_grant,
+                runtime_receipt=runtime_receipt,
+                evidence_id=evidence_receipt.evidence_id,
+                consumed_at=captured_at,
+            )
+            stage = self._stage_authorized_capture(
+                attempt_id_value=capture_attempt_id,
+                raw_content=raw_content,
+                evidence_receipt=evidence_receipt,
+                grant_id=parsed_grant.grant_id,
+                consumption_receipt=consumption_receipt,
+            )
+            ledger.prepare(
+                grant_id=parsed_grant.grant_id,
+                finished_at=captured_at,
+                evidence_id=evidence_receipt.evidence_id,
+                consumption_receipt=consumption_receipt,
+            )
+            self._publish_authorized_stage(
+                stage=stage,
+                evidence_receipt=evidence_receipt,
+                grant_id=parsed_grant.grant_id,
+                consumption_receipt=consumption_receipt,
+            )
+            ledger.consume_prepared(
+                grant_id=parsed_grant.grant_id,
+                finished_at=captured_at,
+            )
+            self._cleanup_stage(stage)
+            return AuthorizedCaptureResult(
+                evidence_receipt=evidence_receipt,
+                consumption_receipt=consumption_receipt,
+            )
+        except Exception as error:
+            if ledger.state(parsed_grant.grant_id) == "prepared":
+                raise CaptureRecoveryRequiredError(
+                    "authorized capture is prepared and requires recovery"
+                ) from error
+            ledger.fail_if_reserved(
+                grant_id=parsed_grant.grant_id,
+                finished_at=captured_at,
+            )
+            if stage is not None:
+                self._cleanup_stage(stage)
+            raise
+
+    @staticmethod
+    def _resolve_locator_content(
+        locator: PromptEvidenceLocatorLike,
+        resolver: Callable[[PromptEvidenceLocatorLike], str],
+    ) -> str:
+        try:
+            raw_content = resolver(locator)
         except Exception as error:
             raise EvidenceNotFoundError(
                 "prompt evidence locator could not be resolved locally"
@@ -296,18 +468,305 @@ class PromptEvidenceCollector:
             raise EvidenceIntegrityError(
                 "prompt evidence locator content hash mismatch"
             )
+        return raw_content
 
-        return self.capture(
-            provider_code="clutch",
-            origin_code="clutch-session-store",
-            captured_at=captured_at,
-            raw_content=raw_content,
-            sensitivity_code=sensitivity_code,
-            retention_code=retention_code,
-            source_locator_id=locator.locator_id,
-            source_content_hash=locator.content_hash,
-            promotion_status=promotion_status,
+    def _write_consumption_receipt(
+        self,
+        grant_id: str,
+        receipt: dict[str, Any],
+    ) -> None:
+        if not re.fullmatch(r"^cg-[0-9a-f]{64}$", grant_id):
+            raise EvidenceIntegrityError("invalid capture grant identifier")
+        directory = self._store_root / "consumption-receipts"
+        self._reject_sync_and_reparse(directory)
+        directory.mkdir(mode=0o700, parents=False, exist_ok=True)
+        if directory.is_symlink() or directory.resolve(strict=True).parent != self._store_root:
+            raise UnsafeEvidenceStoreError("capture receipt directory escaped its root")
+        if os.name != "nt":
+            os.chmod(directory, 0o700)
+        path = directory / f"{grant_id}.json"
+        payload = json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        ) + "\n"
+        try:
+            with path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+            if os.name != "nt":
+                os.chmod(path, 0o600)
+        except FileExistsError:
+            try:
+                if path.read_text(encoding="utf-8") != payload:
+                    raise EvidenceIntegrityError(
+                        "existing capture consumption receipt conflicts"
+                    )
+            except OSError as error:
+                raise EvidenceIntegrityError(
+                    "capture consumption receipt cannot be read"
+                ) from error
+        metadata = path.lstat()
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        if (
+            path.is_symlink()
+            or metadata.st_nlink != 1
+            or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            or path.resolve(strict=True).parent != directory.resolve(strict=True)
+        ):
+            raise EvidenceIntegrityError("capture consumption receipt escaped its root")
+
+    def _stage_authorized_capture(
+        self,
+        *,
+        attempt_id_value: str,
+        raw_content: str,
+        evidence_receipt: PromptEvidenceReceipt,
+        grant_id: str,
+        consumption_receipt: dict[str, Any],
+    ) -> Path:
+        if not re.fullmatch(r"^attempt-[0-9a-f]{64}$", attempt_id_value):
+            raise EvidenceIntegrityError("invalid capture attempt identifier")
+        stage_root = self._store_root / "capture-staging"
+        self._reject_sync_and_reparse(stage_root)
+        stage_root.mkdir(mode=0o700, parents=False, exist_ok=True)
+        if stage_root.is_symlink() or stage_root.resolve(strict=True).parent != self._store_root:
+            raise UnsafeEvidenceStoreError("capture staging root escaped its store")
+        if os.name != "nt":
+            os.chmod(stage_root, 0o700)
+        stage = stage_root / attempt_id_value
+        try:
+            stage.mkdir(mode=0o700, parents=False, exist_ok=False)
+            payloads = {
+                "raw.txt": raw_content,
+                "evidence.json": json.dumps(
+                    evidence_receipt.to_dict(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                ),
+                "consumption.json": json.dumps(
+                    consumption_receipt,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                ) + "\n",
+                "binding.json": json.dumps(
+                    {
+                        "grant_id": grant_id,
+                        "evidence_id": evidence_receipt.evidence_id,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            }
+            for name, payload in payloads.items():
+                path = stage / name
+                with path.open("x", encoding="utf-8", newline="\n") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if os.name != "nt":
+                    os.chmod(path, 0o600)
+            return stage
+        except Exception:
+            if stage.exists() and stage.parent == stage_root:
+                self._cleanup_stage(stage)
+            raise
+
+    def _load_authorized_stage(
+        self,
+        *,
+        stage: Path,
+        grant_id: str,
+        evidence_id: str | None,
+        expected_consumption: dict[str, Any] | None,
+    ) -> tuple[str, PromptEvidenceReceipt, dict[str, Any]]:
+        stage_root = self._store_root / "capture-staging"
+        if stage.parent != stage_root or stage.is_symlink():
+            raise EvidenceIntegrityError("capture stage escaped its root")
+        resolved_stage = stage.resolve(strict=True)
+        if resolved_stage.parent != stage_root.resolve(strict=True):
+            raise EvidenceIntegrityError("capture stage escaped its root")
+        expected_names = {"raw.txt", "evidence.json", "consumption.json", "binding.json"}
+        if {path.name for path in stage.iterdir()} != expected_names:
+            raise EvidenceIntegrityError("capture stage contents are incomplete")
+        for path in stage.iterdir():
+            metadata = path.lstat()
+            attributes = getattr(metadata, "st_file_attributes", 0)
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or metadata.st_nlink != 1
+                or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            ):
+                raise EvidenceIntegrityError("capture stage contains an unsafe object")
+        try:
+            raw_content = (stage / "raw.txt").read_text(encoding="utf-8")
+            evidence_value = json.loads((stage / "evidence.json").read_text(encoding="utf-8"))
+            consumption_value = json.loads(
+                (stage / "consumption.json").read_text(encoding="utf-8")
+            )
+            binding = json.loads((stage / "binding.json").read_text(encoding="utf-8"))
+            receipt = PromptEvidenceReceipt(**evidence_value)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise EvidenceIntegrityError("capture stage is invalid") from error
+        if not isinstance(binding, dict) or set(binding) != {"grant_id", "evidence_id"}:
+            raise EvidenceIntegrityError("capture stage binding mismatch")
+        bound_evidence_id = binding["evidence_id"]
+        if binding["grant_id"] != grant_id or not isinstance(
+            bound_evidence_id, str
+        ) or not re.fullmatch(r"^pe-[0-9a-f]{64}$", bound_evidence_id):
+            raise EvidenceIntegrityError("capture stage binding mismatch")
+        if evidence_id is not None and bound_evidence_id != evidence_id:
+            raise EvidenceIntegrityError("capture stage evidence binding mismatch")
+        if receipt.evidence_id != bound_evidence_id:
+            raise EvidenceIntegrityError("capture stage receipt mismatch")
+        if not isinstance(consumption_value, dict):
+            raise EvidenceIntegrityError("capture stage consumption receipt is invalid")
+        receipt_hash = consumption_value.get("receipt_sha256")
+        consumption_body = dict(consumption_value)
+        consumption_body.pop("receipt_sha256", None)
+        if (
+            receipt_hash != hashlib.sha256(
+                json.dumps(
+                    consumption_body,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            or consumption_value.get("grant_id") != grant_id
+            or consumption_value.get("evidence_id") != bound_evidence_id
+        ):
+            raise EvidenceIntegrityError("capture stage consumption receipt is invalid")
+        if expected_consumption is not None and consumption_value != expected_consumption:
+            raise EvidenceIntegrityError("capture stage consumption receipt mismatch")
+        if _sha256(raw_content) != receipt.content_hash:
+            raise EvidenceIntegrityError("capture stage raw hash mismatch")
+        return raw_content, receipt, consumption_value
+
+    def _publish_authorized_stage(
+        self,
+        *,
+        stage: Path,
+        evidence_receipt: PromptEvidenceReceipt,
+        grant_id: str,
+        consumption_receipt: dict[str, Any],
+    ) -> None:
+        raw_content, staged_receipt, _ = self._load_authorized_stage(
+            stage=stage,
+            grant_id=grant_id,
+            evidence_id=evidence_receipt.evidence_id,
+            expected_consumption=consumption_receipt,
         )
+        if staged_receipt != evidence_receipt:
+            raise EvidenceIntegrityError("capture stage evidence receipt changed")
+        self._write_once(
+            self.raw_dir / f"{evidence_receipt.evidence_id}.txt",
+            raw_content,
+            expected_parent=self._raw_root,
+            suffix=".txt",
+        )
+        self._write_once(
+            self.receipt_dir / f"{evidence_receipt.evidence_id}.json",
+            json.dumps(
+                evidence_receipt.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            ),
+            expected_parent=self._receipt_root,
+            suffix=".json",
+        )
+        self._write_consumption_receipt(grant_id, consumption_receipt)
+
+    def recover_prepared_capture(self, grant_id: str) -> AuthorizedCaptureResult:
+        """Idempotently finish a capture that reached the durable prepared state."""
+        if not re.fullmatch(r"^cg-[0-9a-f]{64}$", grant_id):
+            raise CaptureRecoveryRequiredError("invalid recovery grant identifier")
+        ledger = CaptureGrantLedger(self._store_root)
+        record = ledger.record(grant_id)
+        if record is None or record["state"] not in {"reserved", "prepared", "consumed"}:
+            raise CaptureRecoveryRequiredError("capture is not recoverable")
+        try:
+            if record["state"] == "reserved":
+                stage = self._store_root / "capture-staging" / str(record["attempt_id"])
+                try:
+                    _, evidence_receipt, consumption = self._load_authorized_stage(
+                        stage=stage,
+                        grant_id=grant_id,
+                        evidence_id=None,
+                        expected_consumption=None,
+                    )
+                except Exception as error:
+                    ledger.fail_if_reserved(
+                        grant_id=grant_id,
+                        finished_at=utc_text(datetime.now(UTC)),
+                    )
+                    if stage.exists():
+                        self._cleanup_stage(stage)
+                    raise CaptureRecoveryRequiredError(
+                        "reserved capture was terminally failed"
+                    ) from error
+                ledger.prepare(
+                    grant_id=grant_id,
+                    finished_at=utc_text(datetime.now(UTC)),
+                    evidence_id=evidence_receipt.evidence_id,
+                    consumption_receipt=consumption,
+                )
+                record = ledger.record(grant_id)
+                if record is None:
+                    raise CaptureRecoveryRequiredError(
+                        "prepared capture ledger record disappeared"
+                    )
+            consumption = json.loads(str(record["consumption_receipt_json"]))
+            evidence_id = str(record["evidence_id"])
+            if record["state"] == "prepared":
+                stage = self._store_root / "capture-staging" / str(record["attempt_id"])
+                _, evidence_receipt, _ = self._load_authorized_stage(
+                    stage=stage,
+                    grant_id=grant_id,
+                    evidence_id=evidence_id,
+                    expected_consumption=consumption,
+                )
+                self._publish_authorized_stage(
+                    stage=stage,
+                    evidence_receipt=evidence_receipt,
+                    grant_id=grant_id,
+                    consumption_receipt=consumption,
+                )
+                ledger.consume_prepared(
+                    grant_id=grant_id,
+                    finished_at=utc_text(datetime.now(UTC)),
+                )
+                self._cleanup_stage(stage)
+            else:
+                evidence_receipt = self.find_one(evidence_id=evidence_id)
+                self.read_raw(evidence_id, expected_hash=evidence_receipt.content_hash)
+                self._write_consumption_receipt(grant_id, consumption)
+        except Exception as error:
+            if isinstance(error, CaptureRecoveryRequiredError):
+                raise
+            raise CaptureRecoveryRequiredError("prepared capture recovery failed") from error
+        return AuthorizedCaptureResult(
+            evidence_receipt=evidence_receipt,
+            consumption_receipt=consumption,
+        )
+
+    def _cleanup_stage(self, stage: Path) -> None:
+        stage_root = self._store_root / "capture-staging"
+        if stage.parent != stage_root or not re.fullmatch(
+            r"^attempt-[0-9a-f]{64}$", stage.name
+        ):
+            raise EvidenceIntegrityError("refusing to clean an unbound capture stage")
+        if not stage.exists():
+            return
+        for path in stage.iterdir():
+            if path.is_symlink() or not path.is_file():
+                raise EvidenceIntegrityError("capture stage contains an unsafe object")
+            path.unlink()
+        stage.rmdir()
 
     @staticmethod
     def _validate_clutch_locator(locator: PromptEvidenceLocatorLike) -> None:

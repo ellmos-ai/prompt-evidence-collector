@@ -7,23 +7,26 @@ Der Collector speichert Rohtext **ausschließlich lokal** und projiziert nach au
 - Raw-Store: `<local-app-data>/prompt-evidence-collector/prompt-evidence/` (gehärtete Rechte)
 - Fail-closed bei unsicheren Stores, fehlender/mehrdeutiger Evidenz, Integritätsbrüchen
 - Kein Hintergrundlauf, kein Scheduler, kein Netzwerk
-- Passiver Clutch-Consumer mit Schema-, URI- und Hashprüfung; der Aufrufer stellt den lokalen Resolver bereit
+- Feste interne Clutch-Resolver-Registry; kein vom Aufrufer einschleusbarer Live-Resolver
+- Autorisierter Live-Pfad mit signiertem one-shot CaptureGrant, privatem Trust-Store, immutable Resolver-Receipt und atomarem SQLite-Replay-Schutz
 
 Status: Extraktion aus `ellmos-core@03f6f58`; Code unverändert bis auf den Store-Namespace. Die ellmos-core-Fassung bleibt vorerst; Cutover ist ein eigener gegateter Schritt.
 
-## Passiver Locator-Consumer
+## Autorisierter one-shot Capture
 
 ```python
-receipt = collector.capture_from_locator(
+result = collector.authorize_and_capture_from_locator(
     locator=clutch_locator,
-    resolve_content=local_clutch_resolver,
-    captured_at="2026-08-01T09:00:00Z",
-    sensitivity_code="private",
-    retention_code="local-review",
+    grant=signed_capture_grant,
+    resolver_runtime_receipt=signed_runtime_receipt,
 )
 ```
 
-Die API öffnet selbst keine Datenbank, kein Netzwerk und keinen Provider-Hook. Live-Capture und Cutover benötigen weiterhin ein eigenes Trust- und Aktivierungs-Gate.
+Vor dem ersten Resolveraufruf werden Ed25519-Signatur, exakter Locator-/Hash-/Zweckscope, maximal eine Stunde Grant-Laufzeit sowie Modul, Export, Callable- und Adapter-Hash des intern registrierten Resolvers geprüft. Ein privates SQLite-Ledger reserviert den Grant atomar; `prepared` ist ausschließlich idempotent recoverbar, `consumed` und `failed` sind terminal. Das zusätzliche Consumption-Receipt ist cloud-sicher, Promotion bleibt zwingend `not-reviewed`. Die früheren Low-Level-Capture-Methoden gehören nicht zur öffentlichen Collector-API.
+
+Zulässige Autoritätsquellen sind eine explizite Nutzerentscheidung, eine explizite Capture-Policy oder ein delegierter Decision Avatar. Letzterer gilt nur nach Policy-Registry-Trust-Provisionierung; eine TOM_lm-Prognose oder ein caller-supplied Claim allein autorisiert nichts.
+
+Live-Aktivierung, Trust-Key-Provisionierung und ellmos-core-Cutover bleiben eigene gegatete Schritte. Das Standardprofil bleibt passiv.
 
 ## Entwicklung
 
