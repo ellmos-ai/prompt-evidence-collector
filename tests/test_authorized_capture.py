@@ -234,10 +234,22 @@ def install_fake_clutch(monkeypatch, *, raw: str = RAW) -> dict:
         "fail": False,
         "mutate": None,
         "mutate_candidate": False,
+        "native_locator_validated": False,
     }
 
     class SessionStore:
         pass
+
+    @dataclass(frozen=True)
+    class PromptEvidenceLocator:
+        schema: str
+        provider_code: str
+        locator_id: str
+        source_uri: str
+        content_hash: str
+
+        def __post_init__(self):
+            state["native_locator_validated"] = True
 
     class ClutchEvidenceLocator:
         def __init__(self, store):
@@ -245,6 +257,7 @@ def install_fake_clutch(monkeypatch, *, raw: str = RAW) -> dict:
 
         def resolve_content(self, candidate):
             state["calls"] += 1
+            candidate.__post_init__()
             if state["mutate_candidate"]:
                 candidate.content_hash = "f" * 64
             if state["mutate"] is not None:
@@ -259,6 +272,7 @@ def install_fake_clutch(monkeypatch, *, raw: str = RAW) -> dict:
     evidence = types.ModuleType("clutch.evidence_locator")
     sessions = types.ModuleType("clutch.session_store")
     evidence.ClutchEvidenceLocator = ClutchEvidenceLocator
+    evidence.PromptEvidenceLocator = PromptEvidenceLocator
     sessions.SessionStore = SessionStore
     monkeypatch.setitem(sys.modules, "clutch", clutch)
     monkeypatch.setitem(sys.modules, "clutch.evidence_locator", evidence)
@@ -336,6 +350,7 @@ def test_valid_grant_captures_once_and_emits_cloud_safe_receipt(authorized_conte
     assert CaptureGrantLedger(context["collector"].root).state(
         context["grant"]["grant_id"]
     ) == "consumed"
+    assert context["backend"]["native_locator_validated"] is True
 
 
 def test_public_surface_exposes_only_authorized_capture(authorized_context):
