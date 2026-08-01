@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Protocol
 from uuid import UUID
 
 
@@ -36,6 +36,16 @@ class AmbiguousEvidenceError(PromptEvidenceError):
 
 class EvidenceIntegrityError(PromptEvidenceError):
     """Receipt, Hash und Rohspeicher stimmen nicht überein."""
+
+
+class PromptEvidenceLocatorLike(Protocol):
+    """Minimaler Locatorvertrag für den passiven Clutch-Consumer."""
+
+    schema: str
+    provider_code: str
+    locator_id: str
+    source_uri: str
+    content_hash: str
 
 
 _PROVIDERS = {"anthropic", "clutch", "google", "kimi", "ollama", "openai"}
@@ -241,6 +251,97 @@ class PromptEvidenceCollector:
             suffix=".json",
         )
         return receipt
+
+    def capture_from_locator(
+        self,
+        *,
+        locator: PromptEvidenceLocatorLike,
+        resolve_content: Callable[[PromptEvidenceLocatorLike], str],
+        captured_at: str,
+        sensitivity_code: str,
+        retention_code: str,
+        promotion_status: str = "not-reviewed",
+    ) -> PromptEvidenceReceipt:
+        """Löst einen geprüften Clutch-Locator lokal auf und erfasst ihn passiv.
+
+        Der Aufrufer stellt den lokalen Resolver bereit. Der Collector öffnet
+        weder Netzwerkverbindungen noch Provider-Datenbanken und aktiviert
+        keinen Hintergrundlauf. Schema, URI und Hash werden vor dem Write
+        fail-closed geprüft.
+        """
+        self._validate_current_store()
+        self._validate_codes(
+            provider_code="clutch",
+            origin_code="clutch-session-store",
+            sensitivity_code=sensitivity_code,
+            retention_code=retention_code,
+            promotion_status=promotion_status,
+        )
+        _validate_utc_timestamp(captured_at)
+        if not callable(resolve_content):
+            raise ValueError("resolve_content must be callable")
+
+        self._validate_clutch_locator(locator)
+        try:
+            raw_content = resolve_content(locator)
+        except Exception as error:
+            raise EvidenceNotFoundError(
+                "prompt evidence locator could not be resolved locally"
+            ) from error
+        if not isinstance(raw_content, str) or not raw_content:
+            raise EvidenceNotFoundError(
+                "prompt evidence locator resolved to no local content"
+            )
+        if _sha256(raw_content) != locator.content_hash:
+            raise EvidenceIntegrityError(
+                "prompt evidence locator content hash mismatch"
+            )
+
+        return self.capture(
+            provider_code="clutch",
+            origin_code="clutch-session-store",
+            captured_at=captured_at,
+            raw_content=raw_content,
+            sensitivity_code=sensitivity_code,
+            retention_code=retention_code,
+            source_locator_id=locator.locator_id,
+            source_content_hash=locator.content_hash,
+            promotion_status=promotion_status,
+        )
+
+    @staticmethod
+    def _validate_clutch_locator(locator: PromptEvidenceLocatorLike) -> None:
+        try:
+            schema = locator.schema
+            provider_code = locator.provider_code
+            locator_id = locator.locator_id
+            source_uri = locator.source_uri
+            content_hash = locator.content_hash
+        except (AttributeError, TypeError) as error:
+            raise EvidenceIntegrityError(
+                "prompt evidence locator lacks required fields"
+            ) from error
+        if schema != "ellmos.prompt-evidence-locator.v2":
+            raise EvidenceIntegrityError(
+                "unsupported prompt evidence locator schema"
+            )
+        if provider_code != "clutch":
+            raise EvidenceIntegrityError(
+                "prompt evidence locator provider is not trusted"
+            )
+        if not isinstance(locator_id, str) or not re.fullmatch(
+            r"^loc-[0-9a-f]{64}$",
+            locator_id,
+        ):
+            raise EvidenceIntegrityError("invalid prompt evidence locator ID")
+        if source_uri != f"clutch-local://evidence/{locator_id}":
+            raise EvidenceIntegrityError("invalid prompt evidence locator URI")
+        if not isinstance(content_hash, str) or not _SHA256.fullmatch(
+            content_hash
+        ):
+            raise EvidenceIntegrityError(
+                "prompt evidence locator hash must be lowercase sha256"
+            )
 
     def find_one(
         self,
