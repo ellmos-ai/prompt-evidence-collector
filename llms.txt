@@ -1,0 +1,27 @@
+# ellmos-ai / prompt-evidence-collector
+
+> Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
+
+Last-checked: 2026-08-03
+Test-suite: 44/44 passed (pytest, Python 3.12.10)
+
+## Summary
+
+`prompt-evidence-collector` is an autonomous, standalone, **LOCAL-FIRST** evidence collection module extracted from `ellmos-core`. It stores raw prompt and workflow text exclusively in a hardened local data directory and projects only cryptographic hashes and receipt pointers externally — never raw text, and never automatic uploads or library promotions.
+
+## Key Features & Architecture
+
+- **Local-Only Raw Store**: Raw text saved strictly at `<local-app-data>/prompt-evidence-collector/prompt-evidence/` with hardened folder permissions.
+- **Authorized One-Shot Capture**: Ed25519-signed `CaptureGrant` verification against local trust store, maximum 1-hour validity, single execution (`max_captures=1`).
+- **Cryptographic Receipts**: External projection limited to hashed receipts (codes, opaque IDs, SHA-256 hashes).
+- **Fail-Closed & Replay Protected**: Private SQLite ledger for atomic state tracking (`prepared`, `consumed`, `failed`), preventing replay attacks.
+- **Clutch Resolver Registry**: Immutable internal resolver registry preventing caller-injected execution.
+- **Passive Default**: No background workers, no schedulers, and zero network calls by default.
+
+## Primary Documentation & References
+
+- [README.md](file:///README.md): Project overview, architecture, security model, and authorized capture workflow.
+- [README_de.md](file:///README_de.md): German documentation and architecture overview.
+- [pyproject.toml](file:///pyproject.toml): Dependencies, package config, and pytest settings.
+- [src/prompt_evidence_collector/collector.py](file:///src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
+- [src/prompt_evidence_collector/authorization.py](file:///src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.

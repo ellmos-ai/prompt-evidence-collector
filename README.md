@@ -1,5 +1,16 @@
 # prompt-evidence-collector
 
+[![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
+[![Deutsch](https://img.shields.io/badge/Sprache-Deutsch-de.svg)](README_de.md)
+[![Pytest](https://img.shields.io/badge/Pytest-44%20passed-success.svg)](https://docs.pytest.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Ecosystem](https://img.shields.io/badge/Ecosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
+[![Umbrella](https://img.shields.io/badge/Umbrella-open--bricks-informational.svg)](https://github.com/open-bricks)
+
+> [!NOTE]
+> **LLM / AI Context File Available**: For an AI-optimized machine-readable architectural summary of this repository, inspect [`llms.txt`](file:///llms.txt).
+
 Eigenständiges, cloud-sicheres Prompt-/Workflow-Evidenz-Modul (aus `ellmos-core` extrahiert).
 
 Der Collector speichert Rohtext **ausschließlich lokal** (App-eigener
