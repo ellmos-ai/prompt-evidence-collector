@@ -33,6 +33,15 @@ class CaptureAuthorizationError(RuntimeError):
     """A capture grant or one of its trust bindings is invalid."""
 
 
+class ReadOnlyAuthorizationError(CaptureAuthorizationError):
+    """Stable, cloud-safe failure classification for read-only validation."""
+
+    def __init__(self, message: str, *, code: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.exit_code = exit_code
+
+
 class CaptureGrantReplayError(CaptureAuthorizationError):
     """A one-shot grant has already been reserved or consumed."""
 
@@ -58,6 +67,11 @@ AUTHORITY_SOURCE_CODES = {
     "delegated-decision-avatar",
 }
 KEY_ROLES = {"capture-authority", "runtime-release"}
+READ_ONLY_EXIT_INPUT_INVALID = 2
+READ_ONLY_EXIT_TRUST_INVALID = 3
+READ_ONLY_EXIT_SIGNATURE_INVALID = 4
+READ_ONLY_EXIT_NOT_CURRENT = 5
+READ_ONLY_EXIT_SCOPE_MISMATCH = 6
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _LOCATOR_ID = re.compile(r"^loc-[0-9a-f]{64}$")
@@ -414,9 +428,15 @@ class CaptureGrantVerifier:
 
     TRUST_FILE = "capture-authorities.v1.json"
 
-    def __init__(self, store_root: Path) -> None:
+    def __init__(
+        self,
+        store_root: Path,
+        *,
+        private_path_validator: Callable[[Path], None] | None = None,
+    ) -> None:
         self.store_root = store_root.resolve(strict=True)
         self.trust_dir = self.store_root / "trust"
+        self._private_path_validator = private_path_validator
 
     def verify(
         self,
@@ -426,36 +446,10 @@ class CaptureGrantVerifier:
         locator: Any,
         now: datetime,
     ) -> VerifiedCaptureContext:
-        grant.validate_structure()
-        runtime_receipt.validate_structure()
-        current = now.astimezone(UTC)
-        if not (_utc(grant.not_before, "not_before") <= current <= _utc(grant.expires_at, "expires_at")):
-            raise CaptureAuthorizationError("capture grant is not currently valid")
-        if not (
-            _utc(runtime_receipt.issued_at, "runtime issued_at")
-            <= current
-            <= _utc(runtime_receipt.expires_at, "runtime expires_at")
-        ):
-            raise CaptureAuthorizationError("resolver runtime receipt is not current")
-
-        trust = self._load_trust_store()
-        self._verify_signed_object(
-            trust=trust,
-            fingerprint=grant.authority["issuer_key_fingerprint"],
-            role="capture-authority",
-            authority_source=grant.authority["source_code"],
-            signature=grant.signature,
-            signing_bytes=grant.signing_bytes(),
-            now=current,
-        )
-        self._verify_signed_object(
-            trust=trust,
-            fingerprint=runtime_receipt.issuer_key_fingerprint,
-            role="runtime-release",
-            authority_source=None,
-            signature=runtime_receipt.signature,
-            signing_bytes=runtime_receipt.signing_bytes(),
-            now=current,
+        self.validate_signed_authorization(
+            grant=grant,
+            runtime_receipt=runtime_receipt,
+            now=now,
         )
 
         try:
@@ -476,14 +470,6 @@ class CaptureGrantVerifier:
             raise CaptureAuthorizationError("locator does not match the signed grant")
 
         binding = grant.resolver_binding
-        if (
-            runtime_receipt.component_code != binding["component_code"]
-            or runtime_receipt.source_pin != binding["source_pin"]
-            or runtime_receipt.adapter_sha256 != binding["adapter_sha256"]
-            or canonical_sha256(runtime_receipt.to_dict())
-            != binding["runtime_receipt_sha256"]
-        ):
-            raise CaptureAuthorizationError("resolver runtime does not match the grant")
         resolver = load_registered_resolver(runtime_receipt)
         self._verify_resolver_code(
             resolver,
@@ -503,6 +489,228 @@ class CaptureGrantVerifier:
                 content_hash=grant.locator["content_hash"],
             ),
             resolver=resolver,
+        )
+
+    def preflight_trust_store(self, *, now: datetime) -> dict[str, Any]:
+        """Validate the private trust store without resolving or mutating anything."""
+        current = now.astimezone(UTC)
+        try:
+            trust = self._load_trust_store()
+        except CaptureAuthorizationError as error:
+            raise ReadOnlyAuthorizationError(
+                str(error),
+                code="trust-store-invalid",
+                exit_code=READ_ONLY_EXIT_TRUST_INVALID,
+            ) from error
+
+        safe_keys: list[dict[str, Any]] = []
+        for raw_key in trust["keys"]:
+            try:
+                if not isinstance(raw_key, dict):
+                    raise CaptureAuthorizationError("trusted key fields do not match the schema")
+                fingerprint = raw_key.get("key_fingerprint")
+                roles = raw_key.get("roles")
+                if not isinstance(fingerprint, str) or not isinstance(roles, list) or not roles:
+                    raise CaptureAuthorizationError("trusted key roles are invalid")
+                validated = None
+                for role in roles:
+                    validated = self._trusted_key(
+                        trust=trust,
+                        fingerprint=fingerprint,
+                        role=role,
+                        authority_source=None,
+                        now=current,
+                    )
+                assert validated is not None
+            except CaptureAuthorizationError as error:
+                raise self._classified_error(error, default_code="trust-store-invalid") from error
+            safe_keys.append(
+                {
+                    "key_fingerprint": validated["key_fingerprint"],
+                    "roles": sorted(validated["roles"]),
+                    "authority_source_codes": sorted(validated["authority_source_codes"]),
+                    "status": validated["status"],
+                    "ttl_seconds": max(
+                        0,
+                        int((_utc(validated["expires_at"], "key expires_at") - current).total_seconds()),
+                    ),
+                }
+            )
+        return {
+            "schema": "ellmos.prompt-evidence-trust-preflight.v1",
+            "status": "valid",
+            "code": "trust-store-valid",
+            "trust_schema": trust["schema"],
+            "key_count": len(safe_keys),
+            "keys": safe_keys,
+        }
+
+    def validate_signed_authorization(
+        self,
+        *,
+        grant: CaptureGrant,
+        runtime_receipt: ResolverRuntimeReceipt,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Pure validation of trust, signatures, time bounds, and resolver binding.
+
+        This method deliberately does not resolve a locator, import resolver code,
+        touch the one-shot ledger, capture evidence, call hooks, or use a network.
+        """
+        try:
+            grant.validate_structure()
+            runtime_receipt.validate_structure()
+        except CaptureAuthorizationError as error:
+            raise ReadOnlyAuthorizationError(
+                str(error),
+                code="input-invalid",
+                exit_code=READ_ONLY_EXIT_INPUT_INVALID,
+            ) from error
+
+        current = now.astimezone(UTC)
+        if not (
+            _utc(grant.not_before, "not_before")
+            <= current
+            <= _utc(grant.expires_at, "expires_at")
+        ):
+            raise ReadOnlyAuthorizationError(
+                "capture grant is not currently valid",
+                code="authorization-not-current",
+                exit_code=READ_ONLY_EXIT_NOT_CURRENT,
+            )
+        if not (
+            _utc(runtime_receipt.issued_at, "runtime issued_at")
+            <= current
+            <= _utc(runtime_receipt.expires_at, "runtime expires_at")
+        ):
+            raise ReadOnlyAuthorizationError(
+                "resolver runtime receipt is not current",
+                code="runtime-not-current",
+                exit_code=READ_ONLY_EXIT_NOT_CURRENT,
+            )
+
+        try:
+            trust = self._load_trust_store()
+        except CaptureAuthorizationError as error:
+            raise ReadOnlyAuthorizationError(
+                str(error),
+                code="trust-store-invalid",
+                exit_code=READ_ONLY_EXIT_TRUST_INVALID,
+            ) from error
+        try:
+            self._verify_signed_object(
+                trust=trust,
+                fingerprint=grant.authority["issuer_key_fingerprint"],
+                role="capture-authority",
+                authority_source=grant.authority["source_code"],
+                signature=grant.signature,
+                signing_bytes=grant.signing_bytes(),
+                now=current,
+            )
+            self._verify_signed_object(
+                trust=trust,
+                fingerprint=runtime_receipt.issuer_key_fingerprint,
+                role="runtime-release",
+                authority_source=None,
+                signature=runtime_receipt.signature,
+                signing_bytes=runtime_receipt.signing_bytes(),
+                now=current,
+            )
+        except CaptureAuthorizationError as error:
+            raise self._classified_error(error, default_code="trust-store-invalid") from error
+
+        binding = grant.resolver_binding
+        if (
+            runtime_receipt.component_code != binding["component_code"]
+            or runtime_receipt.source_pin != binding["source_pin"]
+            or runtime_receipt.adapter_sha256 != binding["adapter_sha256"]
+            or canonical_sha256(runtime_receipt.to_dict())
+            != binding["runtime_receipt_sha256"]
+        ):
+            raise ReadOnlyAuthorizationError(
+                "resolver runtime does not match the grant",
+                code="scope-mismatch",
+                exit_code=READ_ONLY_EXIT_SCOPE_MISMATCH,
+            )
+
+        return {
+            "schema": "ellmos.prompt-evidence-authorization-validation.v1",
+            "status": "valid",
+            "code": "authorization-valid",
+            "grant": {
+                "grant_id": grant.grant_id,
+                "action_code": grant.action_code,
+                "provider_code": grant.provider_code,
+                "purpose_code": grant.purpose_code,
+                "locator_id": grant.locator["locator_id"],
+                "content_hash": grant.locator["content_hash"],
+                "sensitivity_code": grant.capture_policy["sensitivity_code"],
+                "retention_code": grant.capture_policy["retention_code"],
+                "promotion_status": grant.capture_policy["promotion_status"],
+                "authority_source_code": grant.authority["source_code"],
+                "ttl_seconds": max(
+                    0,
+                    int((_utc(grant.expires_at, "expires_at") - current).total_seconds()),
+                ),
+            },
+            "runtime": {
+                "receipt_id": runtime_receipt.receipt_id,
+                "component_code": runtime_receipt.component_code,
+                "source_pin": runtime_receipt.source_pin,
+                "adapter_sha256": runtime_receipt.adapter_sha256,
+                "callable_sha256": runtime_receipt.callable_sha256,
+                "immutable": runtime_receipt.immutable,
+                "ttl_seconds": max(
+                    0,
+                    int(
+                        (
+                            _utc(runtime_receipt.expires_at, "runtime expires_at")
+                            - current
+                        ).total_seconds()
+                    ),
+                ),
+            },
+            "binding": {
+                "runtime_receipt_sha256": binding["runtime_receipt_sha256"],
+                "status": "matched",
+            },
+            "trust": {
+                "schema": trust["schema"],
+                "authority_key_fingerprint": grant.authority["issuer_key_fingerprint"],
+                "runtime_key_fingerprint": runtime_receipt.issuer_key_fingerprint,
+                "status": "verified",
+            },
+        }
+
+    @staticmethod
+    def _classified_error(
+        error: CaptureAuthorizationError,
+        *,
+        default_code: str,
+    ) -> ReadOnlyAuthorizationError:
+        message = str(error)
+        if "signature verification failed" in message:
+            return ReadOnlyAuthorizationError(
+                message,
+                code="signature-invalid",
+                exit_code=READ_ONLY_EXIT_SIGNATURE_INVALID,
+            )
+        if "not current" in message:
+            return ReadOnlyAuthorizationError(
+                message,
+                code="authorization-not-current",
+                exit_code=READ_ONLY_EXIT_NOT_CURRENT,
+            )
+        if "mis-scoped" in message or "cannot issue this authority source" in message:
+            return ReadOnlyAuthorizationError(
+                message,
+                code="scope-mismatch",
+                exit_code=READ_ONLY_EXIT_SCOPE_MISMATCH,
+            )
+        return ReadOnlyAuthorizationError(
+            message,
+            code=default_code,
+            exit_code=READ_ONLY_EXIT_TRUST_INVALID,
         )
 
     def _verify_signed_object(
@@ -552,34 +760,13 @@ class CaptureGrantVerifier:
         ]
         if len(matches) != 1:
             raise CaptureAuthorizationError("trusted issuer key is missing or ambiguous")
-        key = _closed_mapping(
-            matches[0],
-            {
-                "key_fingerprint",
-                "public_key_base64",
-                "roles",
-                "authority_source_codes",
-                "status",
-                "not_before",
-                "expires_at",
-            },
-            "trusted key",
-        )
-        public_bytes = _decode_base64(
-            key["public_key_base64"],
-            "trusted public key",
-            length=32,
-        )
-        if hashlib.sha256(public_bytes).hexdigest() != fingerprint:
-            raise CaptureAuthorizationError("trusted key fingerprint mismatch")
-        if not isinstance(key["roles"], list) or not set(key["roles"]) <= KEY_ROLES:
-            raise CaptureAuthorizationError("trusted key roles are invalid")
-        sources = key["authority_source_codes"]
-        if not isinstance(sources, list) or not set(sources) <= AUTHORITY_SOURCE_CODES:
-            raise CaptureAuthorizationError("trusted key authority scopes are invalid")
+        key = self._validate_trust_key_shape(matches[0])
         if key["status"] != "active" or role not in key["roles"]:
             raise CaptureAuthorizationError("trusted issuer key is inactive or mis-scoped")
-        if authority_source is not None and authority_source not in sources:
+        if (
+            authority_source is not None
+            and authority_source not in key["authority_source_codes"]
+        ):
             raise CaptureAuthorizationError("trusted key cannot issue this authority source")
         if not (
             _utc(key["not_before"], "key not_before")
@@ -608,8 +795,18 @@ class CaptureGrantVerifier:
             resolved_path.relative_to(resolved_dir)
             if resolved_dir.parent != self.store_root or not resolved_path.is_file():
                 raise CaptureAuthorizationError("capture trust store escaped its root")
-            if os.name != "nt" and stat.S_IMODE(resolved_dir.stat().st_mode) & 0o077:
-                raise CaptureAuthorizationError("capture trust directory is not private")
+            if self._private_path_validator is not None:
+                self._private_path_validator(resolved_dir)
+                self._private_path_validator(resolved_path)
+            elif os.name == "nt":
+                raise CaptureAuthorizationError(
+                    "capture trust security validator is unavailable"
+                )
+            elif (
+                stat.S_IMODE(resolved_dir.stat().st_mode) & 0o077
+                or stat.S_IMODE(resolved_path.stat().st_mode) & 0o077
+            ):
+                raise CaptureAuthorizationError("capture trust store is not private")
             value = json.loads(resolved_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError) as error:
             if isinstance(error, CaptureAuthorizationError):
@@ -618,7 +815,62 @@ class CaptureGrantVerifier:
         trust = _closed_mapping(value, {"schema", "keys"}, "capture trust store")
         if trust["schema"] != TRUST_SCHEMA or not isinstance(trust["keys"], list):
             raise CaptureAuthorizationError("capture trust store schema is invalid")
+        validated_keys = [self._validate_trust_key_shape(item) for item in trust["keys"]]
+        fingerprints = [item["key_fingerprint"] for item in validated_keys]
+        if len(fingerprints) != len(set(fingerprints)):
+            raise CaptureAuthorizationError("trusted issuer key is missing or ambiguous")
+        trust["keys"] = validated_keys
         return trust
+
+    @staticmethod
+    def _validate_trust_key_shape(value: object) -> dict[str, Any]:
+        key = _closed_mapping(
+            value,
+            {
+                "key_fingerprint",
+                "public_key_base64",
+                "roles",
+                "authority_source_codes",
+                "status",
+                "not_before",
+                "expires_at",
+            },
+            "trusted key",
+        )
+        fingerprint = key["key_fingerprint"]
+        if not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
+            raise CaptureAuthorizationError("trusted key fingerprint is invalid")
+        public_bytes = _decode_base64(
+            key["public_key_base64"],
+            "trusted public key",
+            length=32,
+        )
+        if hashlib.sha256(public_bytes).hexdigest() != fingerprint:
+            raise CaptureAuthorizationError("trusted key fingerprint mismatch")
+        roles = key["roles"]
+        if (
+            not isinstance(roles, list)
+            or not roles
+            or not all(isinstance(item, str) for item in roles)
+            or len(roles) != len(set(roles))
+            or not set(roles) <= KEY_ROLES
+        ):
+            raise CaptureAuthorizationError("trusted key roles are invalid")
+        sources = key["authority_source_codes"]
+        if (
+            not isinstance(sources, list)
+            or not all(isinstance(item, str) for item in sources)
+            or len(sources) != len(set(sources))
+            or not set(sources) <= AUTHORITY_SOURCE_CODES
+        ):
+            raise CaptureAuthorizationError("trusted key authority scopes are invalid")
+        if not isinstance(key["status"], str) or not key["status"]:
+            raise CaptureAuthorizationError("trusted key status is invalid")
+        not_before = _utc(key["not_before"], "key not_before")
+        expires_at = _utc(key["expires_at"], "key expires_at")
+        if not_before > expires_at:
+            raise CaptureAuthorizationError("trusted key validity order is invalid")
+        return key
 
     @staticmethod
     def _verify_resolver_code(

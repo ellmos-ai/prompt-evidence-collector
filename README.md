@@ -2,7 +2,7 @@
 
 [![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
 [![Deutsch](https://img.shields.io/badge/Sprache-Deutsch-de.svg)](README_de.md)
-[![Pytest](https://img.shields.io/badge/Pytest-44%20passed-success.svg)](https://docs.pytest.org/)
+[![Pytest](https://img.shields.io/badge/Pytest-56%20passed%2C%203%20skipped-success.svg)](https://docs.pytest.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Ecosystem](https://img.shields.io/badge/Ecosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
@@ -66,6 +66,46 @@ Capture-Methoden sind nicht Teil der öffentlichen Collector-API.
 
 Live-Aktivierung, Trust-Key-Provisionierung und der ellmos-core-Cutover bleiben
 eigene gegatete Schritte; standardmäßig arbeitet das Modul passiv.
+
+## Read-only authorization preflight
+
+The CLI can inspect the already existing canonical private app store without
+creating files or accepting a caller-selected trust root:
+
+```bash
+python -m prompt_evidence_collector.cli authorization-preflight
+python -m prompt_evidence_collector.cli authorization-validate \
+  --grant capture-grant.json \
+  --runtime-receipt resolver-runtime-receipt.json
+```
+
+`authorization-preflight` validates the canonical store binding, ACL/mode,
+reparse/symlink boundaries, trust-store schema, key fingerprints, roles,
+authority scopes, and validity windows. On Windows the store root, trust
+directory, and trust file must have a private owner/ACL; on POSIX their modes
+must be private. POSIX discovery is bound to the native account home from the
+OS account database; redirected `HOME` or `XDG_DATA_HOME` values fail closed.
+`authorization-validate` additionally
+checks the CaptureGrant and immutable runtime-receipt structures, both Ed25519
+signatures, TTLs, authority scope, and the exact signed grant-to-runtime hash
+binding.
+
+The read-only commands output only stable codes, hashes, scope, TTL, and status.
+They never output paths, public-key values, signatures, or raw content. They do
+not import or execute resolver code, resolve a locator, read back a live runtime,
+touch the replay ledger, capture evidence, call hooks, or use the network. A
+valid result therefore proves the signed runtime receipt and its grant binding,
+not the presence or health of the referenced resolver runtime.
+
+Grant and runtime-receipt inputs must be bounded (maximum 1 MiB), regular,
+single-link files on a fixed local drive. Symlink/reparse, UNC/remote, and known
+cloud/sync paths are rejected before content is opened, preventing hydration or
+network reads.
+
+Stable exit codes are: `0` valid, `2` invalid input, `3` invalid/unavailable
+private trust store, `4` invalid signature, `5` expired/not-current, and `6`
+scope or binding mismatch. Currentness always uses the host's current UTC clock;
+the CLI does not accept a caller-selected validation time.
 
 ## Entwicklung
 

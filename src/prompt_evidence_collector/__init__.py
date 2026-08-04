@@ -16,6 +16,7 @@ from .authorization import (
     CaptureGrant,
     CaptureGrantReplayError,
     CaptureRecoveryRequiredError,
+    ReadOnlyAuthorizationError,
     ResolverRuntimeReceipt,
 )
 
@@ -34,6 +35,7 @@ __all__ = [
     "PromptEvidenceError",
     "PromptEvidenceLocatorLike",
     "PromptEvidenceReceipt",
+    "ReadOnlyAuthorizationError",
     "ResolverRuntimeReceipt",
     "UnsafeEvidenceStoreError",
     "__version__",
