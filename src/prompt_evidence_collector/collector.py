@@ -361,7 +361,10 @@ class PromptEvidenceCollector:
         now = datetime.now(UTC)
         captured_at = utc_text(now)
         self._validate_current_store()
-        verifier = CaptureGrantVerifier(self._store_root)
+        verifier = CaptureGrantVerifier(
+            self._store_root,
+            private_path_validator=self._validate_private_store_child,
+        )
         verified = verifier.verify(
             grant=parsed_grant,
             runtime_receipt=runtime_receipt,
@@ -1029,6 +1032,70 @@ class PromptEvidenceCollector:
         return (base / cls.APP_DIR / cls.STORE_DIR).resolve()
 
     @classmethod
+    def existing_store_root(cls) -> Path:
+        """Resolve and validate the canonical local store without creating it."""
+        if os.name == "nt":
+            local_data = os.environ.get("LOCALAPPDATA")
+            if not local_data:
+                raise UnsafeEvidenceStoreError("LOCALAPPDATA is required")
+            known_base = cls._known_local_app_data().resolve(strict=True)
+            configured_base = Path(local_data).expanduser()
+            cls._reject_sync_and_reparse(configured_base)
+            base = configured_base.resolve(strict=True)
+            if base != known_base:
+                raise UnsafeEvidenceStoreError(
+                    "LOCALAPPDATA does not match the Windows Known Folder"
+                )
+        else:
+            import pwd
+
+            base = cls._existing_posix_base(
+                native_home=Path(pwd.getpwuid(os.getuid()).pw_dir),
+                configured_home=os.environ.get("HOME"),
+                xdg=os.environ.get("XDG_DATA_HOME"),
+            )
+
+        expected = base / cls.APP_DIR / cls.STORE_DIR
+        cls._reject_sync_and_reparse(expected)
+        try:
+            root = expected.resolve(strict=True)
+        except OSError as error:
+            raise UnsafeEvidenceStoreError("evidence-store root is unavailable") from error
+        if root != expected or not root.is_dir():
+            raise UnsafeEvidenceStoreError("evidence-store root binding changed")
+        cls._validate_store_security(root)
+        return root
+
+    @classmethod
+    def _existing_posix_base(
+        cls,
+        *,
+        native_home: Path,
+        configured_home: str | None,
+        xdg: str | None,
+    ) -> Path:
+        """Resolve the fixed POSIX user-data base without trusting XDG redirection."""
+        trusted_home = native_home.resolve(strict=True)
+        if configured_home:
+            supplied_home = Path(configured_home).resolve(strict=True)
+            if supplied_home != trusted_home:
+                raise UnsafeEvidenceStoreError(
+                    "HOME does not match the native account home"
+                )
+        canonical_candidate = trusted_home / ".local" / "share"
+        cls._reject_sync_and_reparse(canonical_candidate)
+        canonical = canonical_candidate.resolve(strict=True)
+        if xdg:
+            configured_candidate = Path(xdg).expanduser()
+            cls._reject_sync_and_reparse(configured_candidate)
+            configured = configured_candidate.resolve(strict=True)
+            if configured != canonical:
+                raise UnsafeEvidenceStoreError(
+                    "XDG_DATA_HOME does not match the canonical local user-data root"
+                )
+        return canonical
+
+    @classmethod
     def _prepare_secure_store(cls, root: Path) -> None:
         cls._reject_sync_and_reparse(root)
         if os.name == "nt":
@@ -1070,6 +1137,24 @@ class PromptEvidenceCollector:
             cls._validate_windows_acl_snapshot(cls._read_windows_acl(root))
         elif stat.S_IMODE(root.stat().st_mode) & 0o077:
             raise UnsafeEvidenceStoreError("evidence-store mode is not private")
+
+    @classmethod
+    def _validate_private_store_child(cls, path: Path) -> None:
+        """Validate an existing private store child without changing its ACL/mode."""
+        cls._reject_sync_and_reparse(path)
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as error:
+            raise UnsafeEvidenceStoreError("private store child is unavailable") from error
+        if resolved != path or not (resolved.is_dir() or resolved.is_file()):
+            raise UnsafeEvidenceStoreError("private store child binding changed")
+        if os.name == "nt":
+            cls._validate_windows_acl_snapshot(
+                cls._read_windows_acl(resolved),
+                allow_safe_inherited=True,
+            )
+        elif stat.S_IMODE(resolved.stat().st_mode) & 0o077:
+            raise UnsafeEvidenceStoreError("private store child mode is not private")
 
     @staticmethod
     def _reject_sync_and_reparse(root: Path) -> None:
@@ -1226,7 +1311,11 @@ class PromptEvidenceCollector:
         return str(executable)
 
     @staticmethod
-    def _validate_windows_acl_snapshot(snapshot: dict[str, Any]) -> None:
+    def _validate_windows_acl_snapshot(
+        snapshot: dict[str, Any],
+        *,
+        allow_safe_inherited: bool = False,
+    ) -> None:
         current_sid = snapshot.get("CurrentSid")
         owner_sid = snapshot.get("OwnerSid")
         if not isinstance(current_sid, str) or not current_sid.startswith("S-1-"):
@@ -1239,18 +1328,26 @@ class PromptEvidenceCollector:
         if not isinstance(rules, list):
             raise UnsafeEvidenceStoreError("ACL snapshot lacks access rules")
         allowed_sids = {current_sid, "S-1-5-18", "S-1-5-32-544"}
+        if allow_safe_inherited and owner_sid == current_sid:
+            allowed_sids.add("S-1-3-4")  # OWNER RIGHTS, bound by owner check above
         current_full_control = False
         for rule in rules:
             if not isinstance(rule, dict):
                 raise UnsafeEvidenceStoreError("invalid ACL rule")
             if rule.get("Type") != "Allow":
                 continue
-            if rule.get("Inherited") is not False:
+            inherited = rule.get("Inherited")
+            if inherited not in {True, False}:
+                raise UnsafeEvidenceStoreError("ACL rule lacks inheritance state")
+            if inherited and not allow_safe_inherited:
                 raise UnsafeEvidenceStoreError("inherited Allow ACE is forbidden")
             sid = rule.get("Sid")
             if sid not in allowed_sids:
                 raise UnsafeEvidenceStoreError("foreign Allow ACE is forbidden")
-            if sid == current_sid and "FullControl" in str(rule.get("Rights", "")):
+            if (
+                sid == current_sid
+                or (sid == "S-1-3-4" and owner_sid == current_sid)
+            ) and "FullControl" in str(rule.get("Rights", "")):
                 current_full_control = True
         if not current_full_control:
             raise UnsafeEvidenceStoreError("current principal lacks explicit FullControl")

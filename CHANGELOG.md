@@ -8,11 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added strictly read-only `authorization-preflight` and
+  `authorization-validate` commands for the canonical private app store.
+- Added a reusable pure authorization validator for trust, signatures, time
+  bounds, authority scope, and signed grant-to-runtime binding.
+- Added stable cloud-safe validation status codes and process exit codes.
+- Bound read-only discovery to the canonical OS account store; added private
+  trust-directory/file validation and bounded local-only input-file gates.
 - Created root `llms.txt` discovery index and structured documentation.
 - Added language switcher navigation bar and GFM callout box for `llms.txt` in `README.md` and `README_de.md`.
 - Added Shields.io badges for Pytest suite status (44 passed), Python 3.11+, MIT License, Ecosystem (`ellmos-ai`), and Umbrella (`open-bricks`).
 - Initialized `CHANGELOG.md` to track maintenance, version alignment, and technical hygiene updates.
 
 ### Verified
-- Verified 44/44 Pytest unit tests passing (100% green).
+- Added regression coverage for valid, tampered, expired, scope-mismatched,
+  side-effect-free, and path/key-leakage scenarios.
+- Verified 56 Pytest tests passing and 3 platform-specific tests skipped.
 - Verified `ruff check` code style compliance (0 lint issues).

@@ -273,6 +273,48 @@ def test_foreign_or_inherited_allow_ace_fails_closed():
         PromptEvidenceCollector._validate_windows_acl_snapshot(inherited)
 
 
+def test_private_child_acl_allows_only_owner_rights_for_current_owner():
+    owner_rights = {
+        "CurrentSid": "S-1-5-21-1000",
+        "OwnerSid": "S-1-5-21-1000",
+        "Rules": [
+            {
+                "Sid": "S-1-3-4",
+                "Type": "Allow",
+                "Rights": "FullControl",
+                "Inherited": True,
+            }
+        ],
+    }
+    PromptEvidenceCollector._validate_windows_acl_snapshot(
+        owner_rights,
+        allow_safe_inherited=True,
+    )
+    foreign = {
+        **owner_rights,
+        "Rules": [
+            *owner_rights["Rules"],
+            {
+                "Sid": "S-1-5-21-9999",
+                "Type": "Allow",
+                "Rights": "ReadAndExecute",
+                "Inherited": True,
+            },
+        ],
+    }
+    with pytest.raises(UnsafeEvidenceStoreError, match="foreign"):
+        PromptEvidenceCollector._validate_windows_acl_snapshot(
+            foreign,
+            allow_safe_inherited=True,
+        )
+    wrong_owner = {**owner_rights, "OwnerSid": "S-1-5-32-544"}
+    with pytest.raises(UnsafeEvidenceStoreError, match="foreign"):
+        PromptEvidenceCollector._validate_windows_acl_snapshot(
+            wrong_owner,
+            allow_safe_inherited=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

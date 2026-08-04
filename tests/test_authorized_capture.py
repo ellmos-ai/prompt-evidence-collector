@@ -21,18 +21,23 @@ from prompt_evidence_collector.authorization import (
     RUNTIME_SCHEMA,
     TRUST_SCHEMA,
     CaptureAuthorizationError,
+    CaptureGrant,
+    CaptureGrantVerifier,
     CaptureGrantLedger,
     CaptureGrantReplayError,
     CaptureRecoveryRequiredError,
+    ResolverRuntimeReceipt,
     callable_fingerprint,
     canonical_bytes,
     canonical_sha256,
     resolver_identity,
 )
+from prompt_evidence_collector.cli import _read_local_json, main as cli_main
 from prompt_evidence_collector.collector import (
     EvidenceIntegrityError,
     EvidenceNotFoundError,
     PromptEvidenceCollector,
+    UnsafeEvidenceStoreError,
 )
 from prompt_evidence_collector.adapters.clutch import (
     resolve_content as registered_resolver,
@@ -322,6 +327,320 @@ def authorized_context(tmp_path, monkeypatch):
         "adapter_hash": adapter_hash,
         "now": now,
     }
+
+
+def write_authorization_inputs(tmp_path: Path, *, grant: dict, runtime: dict) -> tuple[Path, Path]:
+    input_dir = tmp_path / "authorization-inputs"
+    input_dir.mkdir(exist_ok=True)
+    grant_path = input_dir / "grant.json"
+    runtime_path = input_dir / "runtime.json"
+    grant_path.write_text(json.dumps(grant, sort_keys=True), encoding="utf-8")
+    runtime_path.write_text(json.dumps(runtime, sort_keys=True), encoding="utf-8")
+    return grant_path, runtime_path
+
+
+def run_validate_cli(context: dict, tmp_path: Path, capsys) -> tuple[int, dict]:
+    grant_path, runtime_path = write_authorization_inputs(
+        tmp_path,
+        grant=context["grant"],
+        runtime=context["runtime"],
+    )
+    exit_code = cli_main(
+        [
+            "authorization-validate",
+            "--grant",
+            str(grant_path),
+            "--runtime-receipt",
+            str(runtime_path),
+        ]
+    )
+    return exit_code, json.loads(capsys.readouterr().out)
+
+
+def test_read_only_validation_is_cloud_safe_and_has_no_side_effects(
+    authorized_context,
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    context = authorized_context
+    before = {
+        path.relative_to(context["collector"].root): (path.stat().st_mtime_ns, path.read_bytes())
+        for path in context["collector"].root.rglob("*")
+        if path.is_file()
+    }
+
+    def forbidden_resolver_load(*_args, **_kwargs):
+        raise AssertionError("read-only validation loaded resolver code")
+
+    monkeypatch.setattr(
+        "prompt_evidence_collector.authorization.load_registered_resolver",
+        forbidden_resolver_load,
+    )
+    exit_code, report = run_validate_cli(context, tmp_path, capsys)
+    assert exit_code == 0
+    assert report["status"] == "valid"
+    assert report["binding"]["status"] == "matched"
+    assert context["backend"]["calls"] == 0
+    assert not (context["collector"].root / "capture-grants.sqlite3").exists()
+    after = {
+        path.relative_to(context["collector"].root): (path.stat().st_mtime_ns, path.read_bytes())
+        for path in context["collector"].root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+    serialized = json.dumps(report, sort_keys=True)
+    trust = json.loads(
+        (context["collector"].root / "trust" / "capture-authorities.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for forbidden in (
+        str(tmp_path),
+        str(context["collector"].root),
+        context["grant"]["signature"],
+        context["runtime"]["signature"],
+        *(item["public_key_base64"] for item in trust["keys"]),
+    ):
+        assert forbidden not in serialized
+
+
+def test_read_only_validation_rejects_tampered_signature(
+    authorized_context,
+    tmp_path,
+    capsys,
+):
+    signature = bytearray(base64.b64decode(authorized_context["grant"]["signature"]))
+    signature[0] ^= 1
+    authorized_context["grant"]["signature"] = base64.b64encode(signature).decode("ascii")
+    exit_code, report = run_validate_cli(authorized_context, tmp_path, capsys)
+    assert exit_code == 4
+    assert report == {
+        "schema": "ellmos.prompt-evidence-authorization-validation.v1",
+        "status": "invalid",
+        "code": "signature-invalid",
+        "exit_code": 4,
+    }
+
+
+def test_read_only_validation_rejects_expired_grant(
+    authorized_context,
+    tmp_path,
+    capsys,
+):
+    context = authorized_context
+    context["grant"] = sign_grant(
+        context["authority_key"],
+        evidence_locator=context["locator"],
+        runtime_receipt=context["runtime"],
+        adapter_sha256=context["adapter_hash"],
+        now=context["now"],
+        issued_at=context["now"] - timedelta(minutes=30),
+        not_before=context["now"] - timedelta(minutes=30),
+        expires_at=context["now"] - timedelta(minutes=1),
+    )
+    exit_code, report = run_validate_cli(context, tmp_path, capsys)
+    assert exit_code == 5
+    assert report["code"] == "authorization-not-current"
+
+
+def test_read_only_validation_rejects_authority_scope_mismatch(
+    authorized_context,
+    tmp_path,
+    capsys,
+):
+    context = authorized_context
+    write_trust_store(
+        context["collector"],
+        context["authority_key"],
+        context["runtime_key"],
+        authority_sources=["explicit-capture-policy"],
+    )
+    exit_code, report = run_validate_cli(context, tmp_path, capsys)
+    assert exit_code == 6
+    assert report["code"] == "scope-mismatch"
+
+
+def test_trust_preflight_is_read_only_and_does_not_expose_paths_or_keys(
+    authorized_context,
+    capsys,
+):
+    context = authorized_context
+    exit_code = cli_main(
+        [
+            "authorization-preflight",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["status"] == "valid"
+    assert report["key_count"] == 2
+    serialized = json.dumps(report, sort_keys=True)
+    trust = json.loads(
+        (context["collector"].root / "trust" / "capture-authorities.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert str(context["collector"].root) not in serialized
+    for item in trust["keys"]:
+        assert item["public_key_base64"] not in serialized
+
+
+def test_trust_preflight_does_not_create_a_missing_canonical_store(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        PromptEvidenceCollector,
+        "_known_local_app_data",
+        staticmethod(lambda: tmp_path),
+    )
+    expected = tmp_path / PromptEvidenceCollector.APP_DIR
+    exit_code = cli_main(["authorization-preflight"])
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert report["code"] == "trust-store-invalid"
+    assert not expected.exists()
+    assert str(tmp_path) not in json.dumps(report, sort_keys=True)
+
+
+def test_pure_validator_does_not_resolve_or_create_ledger(authorized_context, monkeypatch):
+    context = authorized_context
+    monkeypatch.setattr(
+        "prompt_evidence_collector.authorization.load_registered_resolver",
+        lambda *_args, **_kwargs: pytest.fail("resolver load is outside pure validation"),
+    )
+    report = CaptureGrantVerifier(
+        context["collector"].root,
+        private_path_validator=PromptEvidenceCollector._validate_private_store_child,
+    ).validate_signed_authorization(
+        grant=CaptureGrant.from_dict(context["grant"]),
+        runtime_receipt=ResolverRuntimeReceipt.from_dict(context["runtime"]),
+        now=context["now"],
+    )
+    assert report["status"] == "valid"
+    assert not (context["collector"].root / "capture-grants.sqlite3").exists()
+
+
+def test_trust_store_rejects_non_string_role_without_traceback(
+    authorized_context,
+    capsys,
+):
+    context = authorized_context
+    trust_path = context["collector"].root / "trust" / "capture-authorities.v1.json"
+    trust = json.loads(trust_path.read_text(encoding="utf-8"))
+    trust["keys"][0]["roles"] = [{}]
+    trust_path.write_text(json.dumps(trust, sort_keys=True), encoding="utf-8")
+    exit_code = cli_main(["authorization-preflight"])
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert json.loads(captured.out) == {
+        "schema": "ellmos.prompt-evidence-trust-preflight.v1",
+        "status": "invalid",
+        "code": "trust-store-invalid",
+        "exit_code": 3,
+    }
+    assert captured.err == ""
+
+
+def test_trust_preflight_validates_directory_and_file_security(authorized_context):
+    context = authorized_context
+    checked: list[Path] = []
+    verifier = CaptureGrantVerifier(
+        context["collector"].root,
+        private_path_validator=checked.append,
+    )
+    report = verifier.preflight_trust_store(now=context["now"])
+    assert report["status"] == "valid"
+    assert checked == [
+        context["collector"].root / "trust",
+        context["collector"].root / "trust" / "capture-authorities.v1.json",
+    ]
+
+
+def test_posix_existing_store_base_rejects_home_and_xdg_redirection(tmp_path):
+    native_home = tmp_path / "native-home"
+    canonical = native_home / ".local" / "share"
+    redirected = tmp_path / "redirected"
+    canonical.mkdir(parents=True)
+    redirected.mkdir()
+    assert PromptEvidenceCollector._existing_posix_base(
+        native_home=native_home,
+        configured_home=str(native_home),
+        xdg=str(canonical),
+    ) == canonical.resolve(strict=True)
+    with pytest.raises(UnsafeEvidenceStoreError, match="HOME"):
+        PromptEvidenceCollector._existing_posix_base(
+            native_home=native_home,
+            configured_home=str(redirected),
+            xdg=None,
+        )
+    with pytest.raises(UnsafeEvidenceStoreError, match="XDG_DATA_HOME"):
+        PromptEvidenceCollector._existing_posix_base(
+            native_home=native_home,
+            configured_home=str(native_home),
+            xdg=str(redirected),
+        )
+
+
+def test_authorization_input_rejects_sync_path_without_read_or_path_leakage(
+    authorized_context,
+    tmp_path,
+    capsys,
+):
+    context = authorized_context
+    cloud_grant = tmp_path / "OneDrive" / "never-hydrate-grant.json"
+    _, runtime_path = write_authorization_inputs(
+        tmp_path,
+        grant=context["grant"],
+        runtime=context["runtime"],
+    )
+    exit_code = cli_main(
+        [
+            "authorization-validate",
+            "--grant",
+            str(cloud_grant),
+            "--runtime-receipt",
+            str(runtime_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert json.loads(captured.out)["code"] == "input-invalid"
+    assert str(tmp_path) not in captured.out
+    assert captured.err == ""
+    assert not cloud_grant.parent.exists()
+
+
+def test_authorization_input_rejects_oversized_and_non_regular_files(tmp_path):
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b"{" + b" " * (1024 * 1024) + b"}")
+    with pytest.raises(OSError):
+        _read_local_json(str(oversized))
+    with pytest.raises(OSError):
+        _read_local_json(str(tmp_path))
+
+
+def test_authorization_input_rejects_symlink_or_reparse(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises((OSError, UnsafeEvidenceStoreError)):
+        _read_local_json(str(link))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC is a Windows path class")
+def test_authorization_input_rejects_unc_before_io():
+    with pytest.raises(OSError, match="remote"):
+        _read_local_json(r"\\invalid-host\never-read\grant.json")
 
 
 def test_valid_grant_captures_once_and_emits_cloud_safe_receipt(authorized_context):
