@@ -11,6 +11,7 @@ import os
 import re
 import stat
 import subprocess
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +72,56 @@ _UTC_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
     r"(?:\.\d{1,6})?(?:Z|\+00:00)$"
 )
+
+
+@contextmanager
+def store_lifecycle_lock(root: Path):
+    """Cross-process, filesystem-free lock for trust and capture lifecycle."""
+    resolved = root.resolve(strict=True)
+    lock_id = hashlib.sha256(str(resolved).casefold().encode("utf-8")).hexdigest()
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        # Global namespace makes the lifecycle lock effective across desktop,
+        # RDP, scheduled-task and service sessions on the same Windows host.
+        # The kernel object's default DACL is inherited from the creating
+        # process token; no permissive NULL security descriptor is supplied.
+        name = f"Global\\ellmos-prompt-evidence-{lock_id}"
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        kernel32.ReleaseMutex.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.CreateMutexW(None, False, name)
+        if not handle:
+            raise UnsafeEvidenceStoreError("failed to create lifecycle mutex")
+        acquired = False
+        try:
+            result = kernel32.WaitForSingleObject(handle, 30_000)
+            if result not in {0, 0x80}:  # WAIT_OBJECT_0, WAIT_ABANDONED
+                raise UnsafeEvidenceStoreError("lifecycle mutex is unavailable")
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                kernel32.ReleaseMutex(handle)
+            kernel32.CloseHandle(handle)
+    else:
+        import fcntl
+
+        descriptor = os.open(resolved, os.O_RDONLY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+
 _SYNC_PARTS = {
     ".sync",
     "box",
@@ -337,6 +388,21 @@ class PromptEvidenceCollector:
         )
 
     def authorize_and_capture_from_locator(
+        self,
+        *,
+        locator: PromptEvidenceLocatorLike,
+        grant: CaptureGrant | dict[str, Any],
+        resolver_runtime_receipt: ResolverRuntimeReceipt | dict[str, Any],
+    ) -> AuthorizedCaptureResult:
+        """Serialize trust verification, replay reservation, and capture lifecycle."""
+        with store_lifecycle_lock(self._store_root):
+            return self._authorize_and_capture_from_locator_locked(
+                locator=locator,
+                grant=grant,
+                resolver_runtime_receipt=resolver_runtime_receipt,
+            )
+
+    def _authorize_and_capture_from_locator_locked(
         self,
         *,
         locator: PromptEvidenceLocatorLike,
@@ -1155,6 +1221,42 @@ class PromptEvidenceCollector:
             )
         elif stat.S_IMODE(resolved.stat().st_mode) & 0o077:
             raise UnsafeEvidenceStoreError("private store child mode is not private")
+
+    @classmethod
+    def _restrict_private_store_child(cls, path: Path) -> None:
+        """Remove inherited/public access from an existing store child."""
+        cls._reject_sync_and_reparse(path)
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as error:
+            raise UnsafeEvidenceStoreError("private store child is unavailable") from error
+        if resolved != path or not (resolved.is_dir() or resolved.is_file()):
+            raise UnsafeEvidenceStoreError("private store child binding changed")
+        if os.name == "nt":
+            current_sid = cls._current_windows_sid()
+            grant = f"*{current_sid}:(OI)(CI)F" if resolved.is_dir() else f"*{current_sid}:F"
+            result = subprocess.run(
+                [
+                    "icacls",
+                    str(resolved),
+                    "/inheritance:r",
+                    "/remove:g",
+                    "*S-1-3-4",
+                    "*S-1-1-0",
+                    "*S-1-5-11",
+                    "*S-1-5-32-545",
+                    "/grant:r",
+                    grant,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise UnsafeEvidenceStoreError("failed to restrict private store child ACL")
+        else:
+            os.chmod(resolved, 0o700 if resolved.is_dir() else 0o600)
+        cls._validate_private_store_child(resolved)
 
     @staticmethod
     def _reject_sync_and_reparse(root: Path) -> None:

@@ -2,7 +2,7 @@
 
 [![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
 [![Deutsch](https://img.shields.io/badge/Sprache-Deutsch-de.svg)](README_de.md)
-[![Pytest](https://img.shields.io/badge/Pytest-56%20passed%2C%203%20skipped-success.svg)](https://docs.pytest.org/)
+[![Pytest](https://img.shields.io/badge/Pytest-79%20passed%2C%203%20skipped-success.svg)](https://docs.pytest.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Ecosystem](https://img.shields.io/badge/Ecosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
@@ -106,6 +106,61 @@ Stable exit codes are: `0` valid, `2` invalid input, `3` invalid/unavailable
 private trust store, `4` invalid signature, `5` expired/not-current, and `6`
 scope or binding mismatch. Currentness always uses the host's current UTC clock;
 the CLI does not accept a caller-selected validation time.
+
+## Fail-closed trust enrollment
+
+Version 0.4 adds a separate plan/apply path for enrolling capture-authority and
+runtime-release **public keys**:
+
+```bash
+python -m prompt_evidence_collector.cli trust-enroll plan \
+  --proposal trust-proposal.json
+python -m prompt_evidence_collector.cli trust-enroll apply \
+  --proposal trust-proposal.json \
+  --activation signed-trust-activation.json \
+  --expected-plan-sha256 <sha256>
+```
+
+`plan` is deterministic and read-only. Its output contains fingerprints and
+bounded scope codes, but no paths, public-key values, signatures, or private
+material. `apply` never accepts a caller-selected trust root. It requires an
+Ed25519 activation, bound to `D-20260731-004`, the exact host/system, proposal,
+plan hash, and validity window, signed by an issuer already pinned in the fixed
+private file `bootstrap/trust-activation-authorities.v1.json` below the canonical
+app store.
+
+The resulting V2 trust store enforces provider, purpose, sensitivity,
+retention, one-shot cardinality, and maximum Grant TTL. Publication uses an
+atomic no-overwrite operation with ACL/mode and hash readback. It creates no
+capture ledger, evidence, receipts, hooks, scheduler, or network activity.
+Before the first capture state exists, `trust-enroll rollback
+--expected-trust-sha256 <sha256>` can remove the exact unchanged enrollment.
+After any evidence or Grant state exists, keys must be retired by a signed
+revision; evidence and ledgers are never deleted by rollback.
+
+The module does not generate, store, or rotate private keys and cannot
+self-bootstrap its issuer. Provisioning the fixed bootstrap trust file remains
+an external system-authority/key-custody responsibility. No live trust is
+created merely by installing this version.
+
+## Bundle and partners
+
+This module is the recommended private evidence component of
+`ellmos-prompt-workflow-bundle` (profile `capture`). The bundle manifest in the
+`ellmos-development-system` repository is authoritative for membership and
+compatible versions. Direct partners are:
+
+- required workflow and context gates: `WORKFLOWHOOKER`, `memory-hooker`;
+- curated library authority: `ellmos-core`;
+- optional local locator/session producer: `clutch`;
+- optional personalized method: `build-your-users-mind`;
+- recommended extraction/hygiene skills: `workflow-extract`,
+  `skill-extractor`, `llm-text-hygiene`;
+- optional clients: ProfiPrompt and PromptBoard.
+
+The collector remains independently installable. Bundle membership does not
+transfer prompt-library, policy, decision, user-model, or private-key authority
+to this module.
 
 ## Entwicklung
 

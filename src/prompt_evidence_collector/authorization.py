@@ -53,6 +53,7 @@ class CaptureRecoveryRequiredError(CaptureAuthorizationError):
 GRANT_SCHEMA = "ellmos.prompt-evidence-capture-grant.v1"
 RUNTIME_SCHEMA = "ellmos.resolver-runtime-receipt.v1"
 TRUST_SCHEMA = "ellmos.prompt-evidence-trust-store.v1"
+TRUST_SCHEMA_V2 = "ellmos.prompt-evidence-trust-store.v2"
 CONSUMPTION_SCHEMA = "ellmos.prompt-evidence-capture-consumption-receipt.v1"
 ACTION_CODE = "prompt-evidence.capture"
 PURPOSE_CODES = {
@@ -67,6 +68,8 @@ AUTHORITY_SOURCE_CODES = {
     "delegated-decision-avatar",
 }
 KEY_ROLES = {"capture-authority", "runtime-release"}
+SENSITIVITY_CODES = {"private", "restricted"}
+RETENTION_CODES = {"session", "local-review", "until-curated", "legal-hold"}
 READ_ONLY_EXIT_INPUT_INVALID = 2
 READ_ONLY_EXIT_TRUST_INVALID = 3
 READ_ONLY_EXIT_SIGNATURE_INVALID = 4
@@ -140,6 +143,95 @@ def _decode_base64(value: object, label: str, *, length: int | None = None) -> b
     if length is not None and len(decoded) != length:
         raise CaptureAuthorizationError(f"{label} has an invalid length")
     return decoded
+
+
+def validate_trust_key_shape(value: object) -> dict[str, Any]:
+    """Validate the exact V1 public trust-key record shared by all trust paths."""
+    key = _closed_mapping(
+        value,
+        {
+            "key_fingerprint",
+            "public_key_base64",
+            "roles",
+            "authority_source_codes",
+            "status",
+            "not_before",
+            "expires_at",
+        },
+        "trusted key",
+    )
+    fingerprint = key["key_fingerprint"]
+    if not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
+        raise CaptureAuthorizationError("trusted key fingerprint is invalid")
+    public_bytes = _decode_base64(
+        key["public_key_base64"],
+        "trusted public key",
+        length=32,
+    )
+    if hashlib.sha256(public_bytes).hexdigest() != fingerprint:
+        raise CaptureAuthorizationError("trusted key fingerprint mismatch")
+    roles = key["roles"]
+    if (
+        not isinstance(roles, list)
+        or not roles
+        or not all(isinstance(item, str) for item in roles)
+        or len(roles) != len(set(roles))
+        or not set(roles) <= KEY_ROLES
+    ):
+        raise CaptureAuthorizationError("trusted key roles are invalid")
+    sources = key["authority_source_codes"]
+    if (
+        not isinstance(sources, list)
+        or not all(isinstance(item, str) for item in sources)
+        or len(sources) != len(set(sources))
+        or not set(sources) <= AUTHORITY_SOURCE_CODES
+    ):
+        raise CaptureAuthorizationError("trusted key authority scopes are invalid")
+    if not isinstance(key["status"], str) or not key["status"]:
+        raise CaptureAuthorizationError("trusted key status is invalid")
+    not_before = _utc(key["not_before"], "key not_before")
+    expires_at = _utc(key["expires_at"], "key expires_at")
+    if not_before > expires_at:
+        raise CaptureAuthorizationError("trusted key validity order is invalid")
+    return key
+
+
+def validate_trust_constraints(value: object) -> dict[str, Any]:
+    constraints = _closed_mapping(
+        value,
+        {
+            "provider_codes",
+            "purpose_codes",
+            "sensitivity_codes",
+            "retention_codes",
+            "max_grant_ttl_seconds",
+            "one_shot",
+            "max_captures",
+        },
+        "trust constraints",
+    )
+    allowed = {
+        "provider_codes": {"clutch"},
+        "purpose_codes": PURPOSE_CODES,
+        "sensitivity_codes": SENSITIVITY_CODES,
+        "retention_codes": RETENTION_CODES,
+    }
+    for field, values in allowed.items():
+        selected = constraints[field]
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or not all(isinstance(item, str) for item in selected)
+            or len(selected) != len(set(selected))
+            or not set(selected) <= values
+        ):
+            raise CaptureAuthorizationError(f"trusted {field} are invalid")
+    ttl = constraints["max_grant_ttl_seconds"]
+    if type(ttl) is not int or not 1 <= ttl <= 3600:
+        raise CaptureAuthorizationError("trusted grant TTL is invalid")
+    if constraints["one_shot"] is not True or constraints["max_captures"] != 1:
+        raise CaptureAuthorizationError("trusted capture cardinality is invalid")
+    return constraints
 
 
 @dataclass(frozen=True)
@@ -598,6 +690,14 @@ class CaptureGrantVerifier:
                 exit_code=READ_ONLY_EXIT_TRUST_INVALID,
             ) from error
         try:
+            self._validate_grant_constraints(trust=trust, grant=grant)
+        except CaptureAuthorizationError as error:
+            raise ReadOnlyAuthorizationError(
+                str(error),
+                code="scope-mismatch",
+                exit_code=READ_ONLY_EXIT_SCOPE_MISMATCH,
+            ) from error
+        try:
             self._verify_signed_object(
                 trust=trust,
                 fingerprint=grant.authority["issuer_key_fingerprint"],
@@ -812,8 +912,21 @@ class CaptureGrantVerifier:
             if isinstance(error, CaptureAuthorizationError):
                 raise
             raise CaptureAuthorizationError("capture trust store is unavailable") from error
-        trust = _closed_mapping(value, {"schema", "keys"}, "capture trust store")
-        if trust["schema"] != TRUST_SCHEMA or not isinstance(trust["keys"], list):
+        if not isinstance(value, dict):
+            raise CaptureAuthorizationError("capture trust store schema is invalid")
+        schema = value.get("schema")
+        if schema == TRUST_SCHEMA:
+            trust = _closed_mapping(value, {"schema", "keys"}, "capture trust store")
+        elif schema == TRUST_SCHEMA_V2:
+            trust = _closed_mapping(
+                value,
+                {"schema", "keys", "constraints"},
+                "capture trust store",
+            )
+            trust["constraints"] = validate_trust_constraints(trust["constraints"])
+        else:
+            raise CaptureAuthorizationError("capture trust store schema is invalid")
+        if not isinstance(trust["keys"], list):
             raise CaptureAuthorizationError("capture trust store schema is invalid")
         validated_keys = [self._validate_trust_key_shape(item) for item in trust["keys"]]
         fingerprints = [item["key_fingerprint"] for item in validated_keys]
@@ -823,54 +936,30 @@ class CaptureGrantVerifier:
         return trust
 
     @staticmethod
+    def _validate_grant_constraints(
+        *, trust: dict[str, Any], grant: CaptureGrant
+    ) -> None:
+        if trust["schema"] == TRUST_SCHEMA:
+            return
+        constraints = validate_trust_constraints(trust["constraints"])
+        policy = grant.capture_policy
+        issued = _utc(grant.issued_at, "issued_at")
+        expires = _utc(grant.expires_at, "expires_at")
+        if (
+            grant.provider_code not in constraints["provider_codes"]
+            or grant.purpose_code not in constraints["purpose_codes"]
+            or policy["sensitivity_code"] not in constraints["sensitivity_codes"]
+            or policy["retention_code"] not in constraints["retention_codes"]
+            or int((expires - issued).total_seconds())
+            > constraints["max_grant_ttl_seconds"]
+            or grant.one_shot is not constraints["one_shot"]
+            or grant.max_captures != constraints["max_captures"]
+        ):
+            raise CaptureAuthorizationError("capture grant exceeds trusted constraints")
+
+    @staticmethod
     def _validate_trust_key_shape(value: object) -> dict[str, Any]:
-        key = _closed_mapping(
-            value,
-            {
-                "key_fingerprint",
-                "public_key_base64",
-                "roles",
-                "authority_source_codes",
-                "status",
-                "not_before",
-                "expires_at",
-            },
-            "trusted key",
-        )
-        fingerprint = key["key_fingerprint"]
-        if not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
-            raise CaptureAuthorizationError("trusted key fingerprint is invalid")
-        public_bytes = _decode_base64(
-            key["public_key_base64"],
-            "trusted public key",
-            length=32,
-        )
-        if hashlib.sha256(public_bytes).hexdigest() != fingerprint:
-            raise CaptureAuthorizationError("trusted key fingerprint mismatch")
-        roles = key["roles"]
-        if (
-            not isinstance(roles, list)
-            or not roles
-            or not all(isinstance(item, str) for item in roles)
-            or len(roles) != len(set(roles))
-            or not set(roles) <= KEY_ROLES
-        ):
-            raise CaptureAuthorizationError("trusted key roles are invalid")
-        sources = key["authority_source_codes"]
-        if (
-            not isinstance(sources, list)
-            or not all(isinstance(item, str) for item in sources)
-            or len(sources) != len(set(sources))
-            or not set(sources) <= AUTHORITY_SOURCE_CODES
-        ):
-            raise CaptureAuthorizationError("trusted key authority scopes are invalid")
-        if not isinstance(key["status"], str) or not key["status"]:
-            raise CaptureAuthorizationError("trusted key status is invalid")
-        not_before = _utc(key["not_before"], "key not_before")
-        expires_at = _utc(key["expires_at"], "key expires_at")
-        if not_before > expires_at:
-            raise CaptureAuthorizationError("trusted key validity order is invalid")
-        return key
+        return validate_trust_key_shape(value)
 
     @staticmethod
     def _verify_resolver_code(
