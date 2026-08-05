@@ -2,8 +2,8 @@
 
 > Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
 
-Last-checked: 2026-08-03
-Test-suite: 44/44 passed (pytest, Python 3.12.10)
+Last-checked: 2026-08-05
+Test-suite: 79 passed, 3 platform-specific skipped (pytest, Python 3.12.10)
 
 ## Summary
 
@@ -16,6 +16,8 @@ Test-suite: 44/44 passed (pytest, Python 3.12.10)
 - **Cryptographic Receipts**: External projection limited to hashed receipts (codes, opaque IDs, SHA-256 hashes).
 - **Fail-Closed & Replay Protected**: Private SQLite ledger for atomic state tracking (`prepared`, `consumed`, `failed`), preventing replay attacks.
 - **Clutch Resolver Registry**: Immutable internal resolver registry preventing caller-injected execution.
+- **Fail-Closed Trust Enrollment**: Deterministic plan/apply workflow; signed activations resolve only through a fixed private bootstrap trust file, publish V2 constraints atomically, and never accept caller-selected trust roots.
+- **Bundle Binding**: Recommended `capture` component of `ellmos-prompt-workflow-bundle`; the bundle manifest remains authoritative and this module does not own curated prompts, policies, decisions, user models, or private keys.
 - **Passive Default**: No background workers, no schedulers, and zero network calls by default.
 
 ## Primary Documentation & References
@@ -25,3 +27,4 @@ Test-suite: 44/44 passed (pytest, Python 3.12.10)
 - [pyproject.toml](file:///pyproject.toml): Dependencies, package config, and pytest settings.
 - [src/prompt_evidence_collector/collector.py](file:///src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
 - [src/prompt_evidence_collector/authorization.py](file:///src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.
+- [src/prompt_evidence_collector/trust_enrollment.py](file:///src/prompt_evidence_collector/trust_enrollment.py): Public-key-only trust proposal, activation, atomic apply, and pre-capture rollback.

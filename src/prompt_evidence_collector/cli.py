@@ -20,9 +20,21 @@ from .authorization import (
     ResolverRuntimeReceipt,
 )
 from .collector import PromptEvidenceCollector, UnsafeEvidenceStoreError
+from .trust_enrollment import (
+    PLAN_SCHEMA,
+    RESULT_SCHEMA,
+    ROLLBACK_SCHEMA,
+    TrustActivation,
+    TrustEnroller,
+    TrustEnrollmentError,
+    TrustProposal,
+    build_plan,
+)
 
 
 MAX_AUTHORIZATION_DOCUMENT_BYTES = 1024 * 1024
+TRUST_ENROLL_EXIT_CONFLICT = 7
+TRUST_ENROLL_EXIT_RECOVERY_REQUIRED = 8
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -155,6 +167,81 @@ def _cmd_authorization_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _trust_failure(error: Exception, *, schema: str = RESULT_SCHEMA) -> int:
+    message = str(error)
+    if "recovery-required" in message:
+        code, exit_code = "recovery-required", TRUST_ENROLL_EXIT_RECOVERY_REQUIRED
+    elif "signature" in message:
+        code, exit_code = "signature-invalid", 4
+    elif "not current" in message or "validity" in message or "expired" in message:
+        code, exit_code = "activation-not-current", 5
+    elif "scope" in message or "decision" in message or "binding" in message:
+        code, exit_code = "scope-mismatch", 6
+    elif "already exists" in message or "changed" in message or "capture state" in message:
+        code, exit_code = "state-conflict", TRUST_ENROLL_EXIT_CONFLICT
+    elif "bootstrap" in message or "private store" in message or "ACL" in message:
+        code, exit_code = "bootstrap-trust-invalid", 3
+    else:
+        code, exit_code = "input-invalid", 2
+    return _emit_failure(schema=schema, code=code, exit_code=exit_code)
+
+
+def _cmd_trust_enroll_plan(args: argparse.Namespace) -> int:
+    try:
+        proposal = TrustProposal.from_dict(_read_local_json(args.proposal))
+        report = build_plan(proposal)
+    except (
+        CaptureAuthorizationError,
+        TrustEnrollmentError,
+        OSError,
+        UnsafeEvidenceStoreError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as error:
+        return _trust_failure(error, schema=PLAN_SCHEMA)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_trust_enroll_apply(args: argparse.Namespace) -> int:
+    try:
+        proposal = TrustProposal.from_dict(_read_local_json(args.proposal))
+        activation = TrustActivation.from_dict(_read_local_json(args.activation))
+        enroller = TrustEnroller(PromptEvidenceCollector.existing_store_root())
+        report = enroller.apply(
+            proposal=proposal,
+            activation=activation,
+            expected_plan_sha256=args.expected_plan_sha256,
+            now=datetime.now(UTC),
+        )
+    except (
+        CaptureAuthorizationError,
+        TrustEnrollmentError,
+        OSError,
+        UnsafeEvidenceStoreError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as error:
+        return _trust_failure(error)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_trust_enroll_rollback(args: argparse.Namespace) -> int:
+    try:
+        enroller = TrustEnroller(PromptEvidenceCollector.existing_store_root())
+        report = enroller.rollback(expected_trust_sha256=args.expected_trust_sha256)
+    except (
+        TrustEnrollmentError,
+        OSError,
+        UnsafeEvidenceStoreError,
+        ValueError,
+    ) as error:
+        return _trust_failure(error, schema=ROLLBACK_SCHEMA)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="prompt-evidence-collector")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -174,6 +261,25 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--grant", required=True)
     validate.add_argument("--runtime-receipt", required=True)
     validate.set_defaults(func=_cmd_authorization_validate)
+
+    trust_enroll = sub.add_parser(
+        "trust-enroll",
+        help="plan, apply, or safely roll back capture-authority trust enrollment",
+    )
+    trust_commands = trust_enroll.add_subparsers(dest="trust_command", required=True)
+    trust_plan = trust_commands.add_parser("plan", help="read-only enrollment plan")
+    trust_plan.add_argument("--proposal", required=True)
+    trust_plan.set_defaults(func=_cmd_trust_enroll_plan)
+    trust_apply = trust_commands.add_parser("apply", help="apply an externally approved plan")
+    trust_apply.add_argument("--proposal", required=True)
+    trust_apply.add_argument("--activation", required=True)
+    trust_apply.add_argument("--expected-plan-sha256", required=True)
+    trust_apply.set_defaults(func=_cmd_trust_enroll_apply)
+    trust_rollback = trust_commands.add_parser(
+        "rollback", help="remove first enrollment before any capture state exists"
+    )
+    trust_rollback.add_argument("--expected-trust-sha256", required=True)
+    trust_rollback.set_defaults(func=_cmd_trust_enroll_rollback)
     return parser
 
 

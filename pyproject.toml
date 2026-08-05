@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompt-evidence-collector"
-version = "0.3.1"
+version = "0.4.0"
 description = "Standalone, cloud-safe prompt/workflow evidence collector (local-only raw store, hashed receipts)"
 readme = "README.md"
 requires-python = ">=3.11"

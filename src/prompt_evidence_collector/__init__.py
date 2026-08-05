@@ -19,8 +19,15 @@ from .authorization import (
     ReadOnlyAuthorizationError,
     ResolverRuntimeReceipt,
 )
+from .trust_enrollment import (
+    TrustActivation,
+    TrustEnroller,
+    TrustEnrollmentError,
+    TrustProposal,
+    build_plan as build_trust_enrollment_plan,
+)
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     "AmbiguousEvidenceError",
@@ -37,6 +44,11 @@ __all__ = [
     "PromptEvidenceReceipt",
     "ReadOnlyAuthorizationError",
     "ResolverRuntimeReceipt",
+    "TrustActivation",
+    "TrustEnroller",
+    "TrustEnrollmentError",
+    "TrustProposal",
     "UnsafeEvidenceStoreError",
+    "build_trust_enrollment_plan",
     "__version__",
 ]

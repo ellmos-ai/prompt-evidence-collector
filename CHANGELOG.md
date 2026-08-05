@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added fail-closed `trust-enroll plan`, `trust-enroll apply`, and pre-capture
+  `trust-enroll rollback` commands with a fixed host-local bootstrap trust root.
+- Added the explicit V2 capture trust-store schema with enforced provider,
+  purpose, sensitivity, retention, one-shot, and maximum Grant-TTL constraints.
+- Added atomic no-overwrite publication, restrictive ACL/mode readback, and
+  public-key-only activation artifacts bound to decision `D-20260731-004`.
 - Added strictly read-only `authorization-preflight` and
   `authorization-validate` commands for the canonical private app store.
 - Added a reusable pure authorization validator for trust, signatures, time
@@ -21,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initialized `CHANGELOG.md` to track maintenance, version alignment, and technical hygiene updates.
 
 ### Verified
+- Verified 79 Pytest tests passing and 3 platform-specific tests skipped after
+  adding trust-enrollment, concurrency, rollback, and V2 constraint coverage.
 - Added regression coverage for valid, tampered, expired, scope-mismatched,
   side-effect-free, and path/key-leakage scenarios.
 - Verified 56 Pytest tests passing and 3 platform-specific tests skipped.
