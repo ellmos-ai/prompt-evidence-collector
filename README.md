@@ -2,7 +2,7 @@
 
 [![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
 [![Deutsch](https://img.shields.io/badge/Sprache-Deutsch-de.svg)](README_de.md)
-[![Pytest](https://img.shields.io/badge/Pytest-79%20passed%2C%203%20skipped-success.svg)](https://docs.pytest.org/)
+[![Pytest](https://img.shields.io/badge/Pytest-CI--matrix-informational.svg)](https://docs.pytest.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Ecosystem](https://img.shields.io/badge/Ecosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
@@ -97,6 +97,14 @@ committed last; a pending marker and leftover temporary/orphan objects are
 never auto-deleted. `prompt-evidence-collector doctor` inventories these
 objects and returns exit code `3` for an incomplete or invalid pair, so no
 half-published pair is treated as valid evidence.
+
+Doctor emits the stable `ellmos.prompt-evidence-collector-doctor.v3` schema
+with `status`, `code`, `exit_code`, fully pair-validated `receipt_count`
+(`structural_receipt_count` is exposed separately), complete and incomplete
+pair counts, and counts for invalid receipts, mismatches, orphans,
+pending/temp files, unknown objects, and reparse objects. It never includes raw
+content or provider URIs; an invalid store is reported with exit code `3` and
+is never repaired automatically.
 
 ## Read-only authorization preflight
 
@@ -194,6 +202,20 @@ transfer prompt-library, policy, decision, user-model, or private-key authority
 to this module.
 
 ## Entwicklung
+
+### CI- und Release-Parität
+
+`.github/workflows/ci.yml` führt für Python 3.11 und 3.12 auf Ubuntu, Windows
+und macOS denselben reproduzierbaren Ablauf aus: Installation mit
+`pip install -e ".[dev]"`, Ruff, Pytest mit sichtbaren Plattform-Skips (`-ra`)
+und einen passiven `doctor`-Smoke. Der Windows-Lauf aktiviert die Known-Folder-
+und ACL-Pfade; POSIX-Läufe prüfen private Modi und Reparse-Grenzen. Kein
+Matrixjob startet Capture, Netzwerk oder Cutover.
+
+Die einzige Versionsquelle ist
+`src/prompt_evidence_collector/_version.py`. `pyproject.toml` leitet seine
+Build-Version daraus ab; Paketimport und `ellmos-module.v2.json` werden durch
+`tests/test_release_parity.py` gegengeprüft.
 
 ```bash
 pip install -e .

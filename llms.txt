@@ -2,8 +2,8 @@
 
 > Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
 
-Last-checked: 2026-08-05
-Test-suite: 79 passed, 3 platform-specific skipped (pytest, Python 3.12.10)
+Last-checked: 2026-08-10
+Test-suite: CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
 
 ## Summary
 
@@ -22,6 +22,7 @@ Test-suite: 79 passed, 3 platform-specific skipped (pytest, Python 3.12.10)
 - **Fail-Closed Trust Enrollment**: Deterministic plan/apply workflow; signed activations resolve only through a fixed private bootstrap trust file, publish V2 constraints atomically, and never accept caller-selected trust roots.
 - **Bundle Binding**: Recommended `capture` component of `ellmos-prompt-workflow-bundle`; the bundle manifest remains authoritative and this module does not own curated prompts, policies, decisions, user models, or private keys.
 - **Passive Default**: No background workers, no schedulers, and zero network calls by default.
+- **CI and Version Parity**: The GitHub Actions matrix runs Ruff, pytest with visible platform skips, and a passive Doctor smoke; `_version.py` is the single package version source and is checked against build metadata and the module manifest.
 
 ## Primary Documentation & References
 

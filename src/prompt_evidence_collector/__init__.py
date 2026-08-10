@@ -28,8 +28,7 @@ from .trust_enrollment import (
     TrustProposal,
     build_plan as build_trust_enrollment_plan,
 )
-
-__version__ = "0.4.0"
+from ._version import __version__
 
 __all__ = [
     "AmbiguousEvidenceError",

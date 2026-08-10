@@ -79,7 +79,8 @@ _PROMOTION_AUTHORITIES = {
 _PROMOTION_GATE_SCHEMA = "ellmos.prompt-evidence-promotion-gate.v1"
 _PROMOTION_TRANSITION_SCHEMA = "ellmos.prompt-evidence-promotion-transition.v1"
 _PAIR_SCHEMA = "ellmos.prompt-evidence-pair.v1"
-_OPAQUE_ID = re.compile(r"^(?:pe|loc)-[0-9a-f]{64}$")
+_EVIDENCE_ID = re.compile(r"^pe-[0-9a-f]{64}$")
+_LOCATOR_ID = re.compile(r"^loc-[0-9a-f]{64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _UTC_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
@@ -171,6 +172,36 @@ def _raw_bytes(value: str) -> bytes:
     return value.encode("utf-8", errors="strict")
 
 
+def _validate_evidence_id(
+    value: object,
+    *,
+    error_cls: type[Exception] = ValueError,
+) -> str:
+    if not isinstance(value, str) or not _EVIDENCE_ID.fullmatch(value):
+        raise error_cls("invalid prompt evidence identifier")
+    return value
+
+
+def _validate_locator_id(
+    value: object,
+    *,
+    error_cls: type[Exception] = ValueError,
+) -> str:
+    if not isinstance(value, str) or not _LOCATOR_ID.fullmatch(value):
+        raise error_cls("invalid prompt evidence locator identifier")
+    return value
+
+
+def _validate_sha256(
+    value: object,
+    *,
+    error_cls: type[Exception] = ValueError,
+) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise error_cls("value must be lowercase sha256")
+    return value
+
+
 @dataclass(frozen=True)
 class PromotionGate:
     """Expliziter, lokaler und auditierbarer Nachweis für genau eine Transition."""
@@ -249,11 +280,16 @@ class PromotionGate:
             r"^pg-[0-9a-f]{64}$", self.gate_id
         ):
             raise PromotionGateError("promotion gate ID is invalid")
-        if not isinstance(self.evidence_id, str) or not re.fullmatch(
-            r"^pe-[0-9a-f]{64}$", self.evidence_id
+        if not isinstance(self.evidence_id, str) or not _EVIDENCE_ID.fullmatch(
+            self.evidence_id
         ):
             raise PromotionGateError("promotion gate evidence ID is invalid")
-        if self.from_status not in _PROMOTION or self.to_status not in _PROMOTION:
+        if (
+            not isinstance(self.from_status, str)
+            or not isinstance(self.to_status, str)
+            or self.from_status not in _PROMOTION
+            or self.to_status not in _PROMOTION
+        ):
             raise PromotionGateError("promotion gate status is unsupported")
         allowed = {
             "not-reviewed": {"rejected", "candidate"},
@@ -306,11 +342,7 @@ class PromptEvidenceReceipt:
             raise EvidenceIntegrityError(
                 "unsupported prompt evidence receipt schema"
             )
-        if not isinstance(self.evidence_id, str) or not re.fullmatch(
-            r"^pe-[0-9a-f]{64}$",
-            self.evidence_id,
-        ):
-            raise EvidenceIntegrityError("invalid prompt evidence identifier")
+        _validate_evidence_id(self.evidence_id, error_cls=EvidenceIntegrityError)
         try:
             PromptEvidenceCollector._validate_codes(
                 provider_code=self.provider_code,
@@ -324,12 +356,7 @@ class PromptEvidenceReceipt:
             raise EvidenceIntegrityError(
                 "invalid prompt evidence receipt code or timestamp"
             ) from error
-        if not isinstance(self.content_hash, str) or not _SHA256.fullmatch(
-            self.content_hash
-        ):
-            raise EvidenceIntegrityError(
-                "prompt evidence content hash must be lowercase sha256"
-            )
+        _validate_sha256(self.content_hash, error_cls=EvidenceIntegrityError)
         if self.raw_object_id != self.evidence_id:
             raise EvidenceIntegrityError(
                 "raw object identifier must equal evidence identifier"
@@ -340,23 +367,10 @@ class PromptEvidenceReceipt:
             raise EvidenceIntegrityError(
                 "source locator ID and hash must be supplied together"
             )
-        if self.source_locator_id is not None and (
-            not isinstance(self.source_locator_id, str)
-            or not re.fullmatch(
-                r"^loc-[0-9a-f]{64}$",
-                self.source_locator_id,
-            )
-        ):
-            raise EvidenceIntegrityError(
-                "source locator must be an opaque loc-<sha256> ID"
-            )
-        if self.source_content_hash is not None and (
-            not isinstance(self.source_content_hash, str)
-            or not _SHA256.fullmatch(self.source_content_hash)
-        ):
-            raise EvidenceIntegrityError(
-                "source content hash must be lowercase sha256"
-            )
+        if self.source_locator_id is not None:
+            _validate_locator_id(self.source_locator_id, error_cls=EvidenceIntegrityError)
+        if self.source_content_hash is not None:
+            _validate_sha256(self.source_content_hash, error_cls=EvidenceIntegrityError)
         expected_id = _prompt_evidence_id(
             provider_code=self.provider_code,
             origin_code=self.origin_code,
@@ -413,7 +427,7 @@ class PromptEvidenceCollector:
         promotion_status: str = "not-reviewed",
     ) -> PromptEvidenceReceipt:
         """Erfasst Rohtext; das zurückgegebene Receipt bleibt cloud-safe."""
-        if promotion_status not in _PROMOTION:
+        if not isinstance(promotion_status, str) or promotion_status not in _PROMOTION:
             self._validate_codes(promotion_status=promotion_status)
         if promotion_status != "not-reviewed":
             raise PromotionGateError(
@@ -449,7 +463,7 @@ class PromptEvidenceCollector:
     ) -> PromptEvidenceReceipt:
         """Validate capture data and build a receipt without filesystem writes."""
         self._validate_current_store()
-        if promotion_status not in _PROMOTION:
+        if not isinstance(promotion_status, str) or promotion_status not in _PROMOTION:
             self._validate_codes(promotion_status=promotion_status)
         if promotion_status != "not-reviewed":
             raise PromotionGateError(
@@ -466,10 +480,10 @@ class PromptEvidenceCollector:
         raw_value = _raw_bytes(raw_content)
         if (source_locator_id is None) != (source_content_hash is None):
             raise ValueError("source locator ID and hash must be supplied together")
-        if source_locator_id is not None and not _OPAQUE_ID.fullmatch(source_locator_id):
-            raise ValueError("source locator must be an opaque loc-<sha256> ID")
-        if source_content_hash is not None and not _SHA256.fullmatch(source_content_hash):
-            raise ValueError("source content hash must be lowercase sha256")
+        if source_locator_id is not None:
+            _validate_locator_id(source_locator_id)
+        if source_content_hash is not None:
+            _validate_sha256(source_content_hash)
 
         content_hash = _sha256_bytes(raw_value)
         evidence_id = _prompt_evidence_id(
@@ -515,7 +529,7 @@ class PromptEvidenceCollector:
         ``authorize_and_capture_from_locator`` verwenden.
         """
         self._validate_current_store()
-        if promotion_status not in _PROMOTION:
+        if not isinstance(promotion_status, str) or promotion_status not in _PROMOTION:
             self._validate_codes(promotion_status=promotion_status)
         if promotion_status != "not-reviewed":
             raise PromotionGateError(
@@ -1058,19 +1072,10 @@ class PromptEvidenceCollector:
             raise EvidenceIntegrityError(
                 "prompt evidence locator provider is not trusted"
             )
-        if not isinstance(locator_id, str) or not re.fullmatch(
-            r"^loc-[0-9a-f]{64}$",
-            locator_id,
-        ):
-            raise EvidenceIntegrityError("invalid prompt evidence locator ID")
+        _validate_locator_id(locator_id, error_cls=EvidenceIntegrityError)
         if source_uri != f"clutch-local://evidence/{locator_id}":
             raise EvidenceIntegrityError("invalid prompt evidence locator URI")
-        if not isinstance(content_hash, str) or not _SHA256.fullmatch(
-            content_hash
-        ):
-            raise EvidenceIntegrityError(
-                "prompt evidence locator hash must be lowercase sha256"
-            )
+        _validate_sha256(content_hash, error_cls=EvidenceIntegrityError)
 
     def find_one(
         self,
@@ -1080,8 +1085,14 @@ class PromptEvidenceCollector:
         content_hash: str | None = None,
     ) -> PromptEvidenceReceipt:
         """Löst genau ein Receipt auf; null oder mehrere Treffer sind Fehler."""
-        if evidence_id is not None and not _OPAQUE_ID.fullmatch(evidence_id):
-            raise EvidenceNotFoundError("invalid evidence identifier")
+        if evidence_id is not None:
+            _validate_evidence_id(evidence_id, error_cls=EvidenceNotFoundError)
+        if provider_code is not None and (
+            not isinstance(provider_code, str) or provider_code not in _PROVIDERS
+        ):
+            raise EvidenceNotFoundError("invalid provider code")
+        if content_hash is not None:
+            _validate_sha256(content_hash, error_cls=EvidenceNotFoundError)
         self._validate_current_store()
         matches: list[PromptEvidenceReceipt] = []
         for path in sorted(self.receipt_dir.glob("pe-*.json")):
@@ -1102,77 +1113,170 @@ class PromptEvidenceCollector:
         return matches[0]
 
     def store_inventory(self) -> dict[str, Any]:
-        """Liest den Raw/Receipt-Pairzustand ohne Bereinigung oder Fremdänderung."""
+        """Verifiziert den gebundenen Store read-only und ohne Inhaltsausgabe."""
         self._validate_current_store(check_acl=False)
-        raw_ids = {
-            path.stem
-            for path in self.raw_dir.glob("pe-*.txt")
-            if path.is_file() and not path.is_symlink()
+        names = {
+            "raw": re.compile(r"^pe-[0-9a-f]{64}\.txt$"),
+            "receipt": re.compile(r"^pe-[0-9a-f]{64}\.json$"),
+            "pair": re.compile(r"^pe-[0-9a-f]{64}\.json$"),
+            "pending": re.compile(r"^pe-[0-9a-f]{64}\.pending\.json$"),
+            "temporary": re.compile(
+                r"^pe-[0-9a-f]{64}\.[0-9a-f]{32}\.(?:raw|receipt|pair)\.tmp$"
+            ),
         }
-        receipt_ids = {
-            path.stem
-            for path in self.receipt_dir.glob("pe-*.json")
-            if path.is_file() and not path.is_symlink()
-        }
-        pair_ids = {
-            path.stem
-            for path in self.pair_dir.glob("pe-*.json")
-            if path.is_file()
-            and not path.is_symlink()
-            and not path.name.endswith(".pending.json")
-        }
-        pending_ids = {
-            path.name.removesuffix(".pending.json")
-            for path in self.pair_dir.glob("pe-*.pending.json")
-            if path.is_file() and not path.is_symlink()
-        }
-        all_ids = raw_ids | receipt_ids | pair_ids | pending_ids
-        complete = 0
-        incomplete = 0
-        for evidence_id in sorted(all_ids):
+        raw_ids: set[str] = set()
+        valid_receipts: dict[str, PromptEvidenceReceipt] = {}
+        pair_ids: set[str] = set()
+        pending_ids: set[str] = set()
+        invalid_receipt_count = 0
+        unknown_object_count = 0
+        reparse_object_count = 0
+        temporary_count = 0
+
+        def is_reparse(path: Path, metadata: os.stat_result) -> bool:
+            attributes = getattr(metadata, "st_file_attributes", 0)
+            return path.is_symlink() or bool(
+                attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+
+        def scan_raw() -> None:
+            nonlocal unknown_object_count, reparse_object_count, temporary_count
             try:
-                if evidence_id not in receipt_ids:
-                    raise EvidenceIntegrityError("receipt object is missing")
-                receipt = self._read_receipt(
-                    self.receipt_dir / f"{evidence_id}.json",
-                    self._receipt_root,
-                    check_pair=False,
-                )
+                entries = list(self.raw_dir.iterdir())
+            except OSError:
+                unknown_object_count += 1
+                return
+            for path in entries:
+                try:
+                    metadata = path.lstat()
+                except OSError:
+                    unknown_object_count += 1
+                    continue
+                if is_reparse(path, metadata):
+                    reparse_object_count += 1
+                elif names["raw"].fullmatch(path.name) and path.is_file():
+                    raw_ids.add(path.stem)
+                elif names["temporary"].fullmatch(path.name) and path.is_file():
+                    temporary_count += 1
+                else:
+                    unknown_object_count += 1
+
+        def scan_receipts() -> None:
+            nonlocal unknown_object_count, reparse_object_count, invalid_receipt_count, temporary_count
+            try:
+                entries = list(self.receipt_dir.iterdir())
+            except OSError:
+                unknown_object_count += 1
+                return
+            for path in entries:
+                try:
+                    metadata = path.lstat()
+                except OSError:
+                    unknown_object_count += 1
+                    continue
+                if is_reparse(path, metadata):
+                    reparse_object_count += 1
+                elif names["receipt"].fullmatch(path.name) and path.is_file():
+                    try:
+                        receipt = self._read_receipt(
+                            path,
+                            self._receipt_root,
+                            check_pair=False,
+                        )
+                    except (OSError, TypeError, ValueError, PromptEvidenceError):
+                        invalid_receipt_count += 1
+                    else:
+                        valid_receipts[receipt.evidence_id] = receipt
+                elif names["temporary"].fullmatch(path.name) and path.is_file():
+                    temporary_count += 1
+                else:
+                    unknown_object_count += 1
+
+        def scan_pairs() -> None:
+            nonlocal unknown_object_count, reparse_object_count, temporary_count
+            try:
+                entries = list(self.pair_dir.iterdir())
+            except OSError:
+                unknown_object_count += 1
+                return
+            for path in entries:
+                try:
+                    metadata = path.lstat()
+                except OSError:
+                    unknown_object_count += 1
+                    continue
+                if is_reparse(path, metadata):
+                    reparse_object_count += 1
+                elif names["pending"].fullmatch(path.name) and path.is_file():
+                    pending_ids.add(path.name.removesuffix(".pending.json"))
+                elif names["pair"].fullmatch(path.name) and path.is_file():
+                    pair_ids.add(path.stem)
+                elif names["temporary"].fullmatch(path.name) and path.is_file():
+                    temporary_count += 1
+                else:
+                    unknown_object_count += 1
+
+        scan_raw()
+        scan_receipts()
+        scan_pairs()
+
+        complete_ids: set[str] = set()
+        invalid_pair_count = 0
+        for evidence_id, receipt in valid_receipts.items():
+            try:
                 self._assert_complete_pair(receipt)
-            except Exception:
-                incomplete += 1
+            except (OSError, TypeError, ValueError, PromptEvidenceError):
+                invalid_pair_count += 1
             else:
-                complete += 1
-        pending_count = len(pending_ids)
-        temporary_count = sum(
-            len(list(directory.glob("*.tmp")))
-            for directory in (self.raw_dir, self.receipt_dir, self.pair_dir)
+                complete_ids.add(evidence_id)
+
+        orphan_raw = len(raw_ids - set(valid_receipts))
+        orphan_receipts = len(set(valid_receipts) - raw_ids)
+        orphan_pairs = len(pair_ids - set(valid_receipts))
+        all_ids = raw_ids | set(valid_receipts) | pair_ids | pending_ids
+        incomplete = len(all_ids - complete_ids)
+        issue_count = (
+            invalid_receipt_count
+            + invalid_pair_count
+            + orphan_raw
+            + orphan_receipts
+            + orphan_pairs
+            + len(pending_ids)
+            + temporary_count
+            + unknown_object_count
+            + reparse_object_count
         )
-        orphan_raw = len(raw_ids - receipt_ids)
-        orphan_receipts = len(receipt_ids - raw_ids)
-        orphan_pairs = len(pair_ids - (raw_ids & receipt_ids))
-        invalid = incomplete > 0 or pending_count > 0 or temporary_count > 0
+        status = "valid" if issue_count == 0 else "invalid"
         return {
-            "schema": "ellmos.prompt-evidence-collector-doctor.v2",
-            "status": "invalid" if invalid else "valid",
+            "schema": "ellmos.prompt-evidence-collector-doctor.v3",
+            "status": status,
+            "code": "store-valid" if status == "valid" else "store-invalid",
+            "exit_code": 0 if status == "valid" else 3,
             "raw_dir_exists": self.raw_dir.is_dir(),
             "receipt_dir_exists": self.receipt_dir.is_dir(),
-            "receipt_count": len(receipt_ids),
+            "pair_dir_exists": self.pair_dir.is_dir(),
+            "raw_count": len(raw_ids),
+            "receipt_count": len(complete_ids),
+            "structural_receipt_count": len(valid_receipts),
             "pair_count": len(pair_ids),
-            "complete_pair_count": complete,
+            "complete_pair_count": len(complete_ids),
             "incomplete_pair_count": incomplete,
+            "invalid_receipt_count": invalid_receipt_count,
+            "invalid_pair_count": invalid_pair_count,
             "orphan_raw_count": orphan_raw,
             "orphan_receipt_count": orphan_receipts,
             "orphan_pair_count": orphan_pairs,
-            "pending_pair_count": pending_count,
+            "pending_pair_count": len(pending_ids),
             "temporary_file_count": temporary_count,
+            "unknown_object_count": unknown_object_count,
+            "reparse_object_count": reparse_object_count,
+            "ambiguous_count": 0,
         }
 
     def read_raw(self, evidence_id: str, *, expected_hash: str) -> str:
         """Liest Rohtext lokal nach strikter ID- und Hash-Prüfung."""
         self._validate_current_store()
-        if not _SHA256.fullmatch(expected_hash):
-            raise EvidenceIntegrityError("invalid expected evidence hash")
+        _validate_sha256(expected_hash, error_cls=EvidenceIntegrityError)
         receipt = self.find_one(evidence_id=evidence_id)
         if receipt.content_hash != expected_hash:
             raise EvidenceIntegrityError("prompt evidence hash mismatch")
@@ -1262,11 +1366,7 @@ class PromptEvidenceCollector:
             )
 
     def _validated_raw_path(self, evidence_id: str, *, require_exists: bool = True) -> Path:
-        if not isinstance(evidence_id, str) or not re.fullmatch(
-            r"^pe-[0-9a-f]{64}$",
-            evidence_id,
-        ):
-            raise EvidenceIntegrityError("invalid prompt evidence identifier")
+        _validate_evidence_id(evidence_id, error_cls=EvidenceIntegrityError)
         try:
             candidate = self.raw_dir / f"{evidence_id}.txt"
             resolved = self._validated_store_child(
@@ -1587,7 +1687,7 @@ class PromptEvidenceCollector:
             "promotion_status": _PROMOTION,
         }
         for name, value in codes.items():
-            if value not in allowed[name]:
+            if not isinstance(value, str) or value not in allowed[name]:
                 raise ValueError(f"unsupported {name}")
 
     @staticmethod

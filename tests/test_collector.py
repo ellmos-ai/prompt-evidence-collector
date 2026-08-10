@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from prompt_evidence_collector.cli import main as cli_main
 from prompt_evidence_collector.collector import (
     AmbiguousEvidenceError,
     EvidenceIntegrityError,
@@ -628,3 +629,181 @@ def test_doctor_detects_unpaired_and_temporary_capture_objects(collector, monkey
     assert inventory["orphan_raw_count"] == 1
     assert inventory["pending_pair_count"] == 1
     assert inventory["temporary_file_count"] >= 2
+
+
+def test_cli_doctor_reports_empty_healthy_store_without_capture(collector, capsys):
+    assert cli_main(["doctor"]) == 0
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["schema"] == "ellmos.prompt-evidence-collector-doctor.v3"
+    assert report["status"] == "valid"
+    assert report["exit_code"] == 0
+    assert report["receipt_count"] == 0
+    assert "provider" not in output.lower()
+    assert "clutch-local://" not in output
+
+
+def test_cli_doctor_counts_only_structurally_valid_receipts(collector, capsys):
+    receipt = capture(collector, raw="doctor secret")
+    receipt_path = collector.receipt_dir / f"{receipt.evidence_id}.json"
+    receipt_path.write_bytes(b'{"content_hash": ["not-a-hash"]}')
+
+    before = receipt_path.read_bytes()
+    assert cli_main(["doctor"]) == 3
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["status"] == "invalid"
+    assert report["receipt_count"] == 0
+    assert report["invalid_receipt_count"] == 1
+    assert "doctor secret" not in output
+    assert receipt_path.read_bytes() == before
+
+
+def test_cli_doctor_reports_unknown_objects_and_raw_mismatch(collector, capsys):
+    receipt = capture(collector, raw="doctor secret")
+    (collector.raw_dir / "unexpected.bin").write_bytes(b"foreign raw text")
+    raw_path = collector.raw_dir / f"{receipt.evidence_id}.txt"
+    raw_path.write_bytes(raw_path.read_bytes() + b"tampered")
+
+    assert cli_main(["doctor"]) == 3
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["status"] == "invalid"
+    assert report["receipt_count"] == 0
+    assert report["structural_receipt_count"] == 1
+    assert report["invalid_pair_count"] == 1
+    assert report["unknown_object_count"] == 1
+    assert "foreign raw text" not in output
+    assert "doctor secret" not in output
+
+
+def test_cli_doctor_reports_orphan_and_pending_objects(collector, capsys):
+    receipt = capture(collector, raw="orphan secret")
+    raw_path = collector.raw_dir / f"{receipt.evidence_id}.txt"
+    raw_path.unlink()
+    pending = collector.pair_dir / f"{receipt.evidence_id}.pending.json"
+    pending.write_bytes(b'{"schema":"ellmos.prompt-evidence-pair.v1"}')
+
+    assert cli_main(["doctor"]) == 3
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["status"] == "invalid"
+    assert report["receipt_count"] == 0
+    assert report["structural_receipt_count"] == 1
+    assert report["orphan_receipt_count"] == 1
+    assert report["pending_pair_count"] == 1
+    assert "orphan secret" not in output
+
+
+def test_cli_doctor_reports_reparse_objects_without_following_them(collector, capsys):
+    outside = collector.root / "outside-doctor-secret.txt"
+    outside.write_text("reparse secret", encoding="utf-8")
+    link = collector.raw_dir / "unexpected-link.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    assert cli_main(["doctor"]) == 3
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["status"] == "invalid"
+    assert report["reparse_object_count"] == 1
+    assert "reparse secret" not in output
+
+
+@pytest.mark.parametrize("evidence_id", ["loc-" + "a" * 64, 1, [], {}, None])
+def test_find_one_rejects_non_evidence_ids_deterministically(collector, evidence_id):
+    with pytest.raises(EvidenceNotFoundError):
+        collector.find_one(evidence_id=evidence_id)
+
+
+@pytest.mark.parametrize("source_locator_id", ["pe-" + "a" * 64, 1, [], {}])
+@pytest.mark.parametrize("source_content_hash", ["b" * 64, 1, [], {}])
+def test_capture_source_pair_types_fail_before_write(
+    collector,
+    source_locator_id,
+    source_content_hash,
+):
+    with pytest.raises(ValueError):
+        collector._capture(
+            provider_code="clutch",
+            origin_code="clutch-session-store",
+            captured_at="2026-07-30T08:00:00Z",
+            raw_content="typed input",
+            sensitivity_code="private",
+            retention_code="local-review",
+            source_locator_id=source_locator_id,
+            source_content_hash=source_content_hash,
+        )
+    assert collector.store_inventory()["receipt_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provider_code", []),
+        ("origin_code", {}),
+        ("sensitivity_code", 1),
+        ("retention_code", None),
+        ("promotion_status", []),
+    ],
+)
+def test_capture_code_types_fail_closed_without_typeerror(collector, field, value):
+    values = {
+        "provider_code": "clutch",
+        "origin_code": "clutch-session-store",
+        "captured_at": "2026-07-30T08:00:00Z",
+        "raw_content": "typed input",
+        "sensitivity_code": "private",
+        "retention_code": "local-review",
+        "promotion_status": "not-reviewed",
+    }
+    values[field] = value
+    with pytest.raises(ValueError):
+        collector._capture(**values)
+    assert collector.store_inventory()["receipt_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", []),
+        ("provider_code", {}),
+        ("locator_id", 1),
+        ("source_uri", []),
+        ("content_hash", {}),
+    ],
+)
+def test_locator_type_errors_fail_before_resolver_or_write(collector, field, value):
+    locator = replace(locator_for(), **{field: value})
+    called = False
+
+    def resolver(_candidate):
+        nonlocal called
+        called = True
+        return "typed input"
+
+    with pytest.raises(EvidenceIntegrityError):
+        collector._capture_from_locator(
+            locator=locator,
+            resolve_content=resolver,
+            captured_at="2026-08-01T09:00:00Z",
+            sensitivity_code="private",
+            retention_code="local-review",
+        )
+    assert called is False
+    assert collector.store_inventory()["receipt_count"] == 0
+
+
+def test_receipt_type_tampering_is_wrapped_as_integrity_error(collector):
+    receipt = capture(collector)
+    with pytest.raises(EvidenceIntegrityError):
+        replace(receipt, promotion_status=[])
+
+    receipt_path = collector.receipt_dir / f"{receipt.evidence_id}.json"
+    value = receipt.to_dict()
+    value["content_hash"] = []
+    receipt_path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(EvidenceIntegrityError):
+        collector.find_one(evidence_id=receipt.evidence_id)

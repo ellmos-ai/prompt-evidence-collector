@@ -40,7 +40,9 @@ from prompt_evidence_collector.trust_enrollment import (
 )
 
 
-NOW = datetime(2026, 8, 5, 0, 15, tzinfo=UTC)
+# Keep validity fixtures relative to the execution date so CI cannot expire
+# merely because the repository is tested after the original fixture day.
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 def _time(delta: timedelta) -> str:

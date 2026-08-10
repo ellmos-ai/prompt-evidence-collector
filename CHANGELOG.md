@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added Doctor v3 inventory/readback for structurally valid receipts, exact
+  Raw/pair verification, orphan/temp/reparse/unknown-object counts, and stable
+  invalid-store exit code `3`.
+- Added centralized fail-closed ID/hash/code validation and boundary tests for
+  non-string Locator, filter, source-pair, and Receipt fields.
+- Added the Ubuntu/Windows/macOS Python 3.11/3.12 CI matrix, passive Doctor
+  smoke, and a single `_version.py` source checked against package/build/
+  manifest metadata.
 - Added a fail-closed, auditable `PromotionGate` lifecycle for all promotion
   changes; capture remains `not-reviewed` and no raw text leaves the local store.
 - Added exact UTF-8 byte hashing/readback without newline normalization for

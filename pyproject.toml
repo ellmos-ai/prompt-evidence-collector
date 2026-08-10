@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompt-evidence-collector"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Standalone, cloud-safe prompt/workflow evidence collector (local-only raw store, hashed receipts)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,9 @@ prompt-evidence-collector = "prompt_evidence_collector.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "prompt_evidence_collector._version.__version__"}
 
 [tool.pytest.ini_options]
 addopts = "-q"

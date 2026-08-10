@@ -19,7 +19,7 @@ from .authorization import (
     ReadOnlyAuthorizationError,
     ResolverRuntimeReceipt,
 )
-from .collector import PromptEvidenceCollector, UnsafeEvidenceStoreError
+from .collector import PromptEvidenceCollector, PromptEvidenceError, UnsafeEvidenceStoreError
 from .trust_enrollment import (
     PLAN_SCHEMA,
     RESULT_SCHEMA,
@@ -39,11 +39,21 @@ TRUST_ENROLL_EXIT_RECOVERY_REQUIRED = 8
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Native readback: store root and crash-safe Raw/Receipt pairing state."""
-    collector = PromptEvidenceCollector()
-    report = collector.store_inventory()
+    try:
+        collector = PromptEvidenceCollector()
+        report = collector.store_inventory()
+    except (OSError, PromptEvidenceError):
+        report = {
+            "schema": "ellmos.prompt-evidence-collector-doctor.v3",
+            "status": "invalid",
+            "code": "store-unavailable",
+            "exit_code": 3,
+        }
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 3
     report["store_root"] = str(collector._store_root)
-    print(json.dumps(report, indent=2))
-    return 0 if report["status"] == "valid" else 3
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return int(report["exit_code"])
 
 
 def _emit_failure(*, schema: str, code: str, exit_code: int) -> int:
