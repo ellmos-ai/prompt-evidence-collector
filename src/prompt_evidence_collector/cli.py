@@ -38,17 +38,12 @@ TRUST_ENROLL_EXIT_RECOVERY_REQUIRED = 8
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Native readback: store root, permissions, receipt directory state."""
+    """Native readback: store root and crash-safe Raw/Receipt pairing state."""
     collector = PromptEvidenceCollector()
-    report = {
-        "schema": "ellmos.prompt-evidence-collector-doctor.v1",
-        "store_root": str(collector._store_root),
-        "raw_dir_exists": collector.raw_dir.is_dir(),
-        "receipt_dir_exists": collector.receipt_dir.is_dir(),
-        "receipt_count": len(list(collector.receipt_dir.glob("*.json"))),
-    }
+    report = collector.store_inventory()
+    report["store_root"] = str(collector._store_root)
     print(json.dumps(report, indent=2))
-    return 0
+    return 0 if report["status"] == "valid" else 3
 
 
 def _emit_failure(*, schema: str, code: str, exit_code: int) -> int:

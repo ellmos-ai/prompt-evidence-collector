@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added a fail-closed, auditable `PromotionGate` lifecycle for all promotion
+  changes; capture remains `not-reviewed` and no raw text leaves the local store.
+- Added exact UTF-8 byte hashing/readback without newline normalization for
+  Windows and POSIX line-ending stability.
+- Added durable, no-overwrite Raw/Receipt pair publication, pending markers,
+  pair manifests, and fail-closed doctor inventory for incomplete objects.
 - Added fail-closed `trust-enroll plan`, `trust-enroll apply`, and pre-capture
   `trust-enroll rollback` commands with a fixed host-local bootstrap trust root.
 - Added the explicit V2 capture trust-store schema with enforced provider,

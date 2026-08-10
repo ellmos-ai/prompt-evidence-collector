@@ -8,6 +8,8 @@ from .collector import (
     PromptEvidenceError,
     PromptEvidenceLocatorLike,
     PromptEvidenceReceipt,
+    PromotionGate,
+    PromotionGateError,
     UnsafeEvidenceStoreError,
 )
 from .authorization import (
@@ -42,6 +44,8 @@ __all__ = [
     "PromptEvidenceError",
     "PromptEvidenceLocatorLike",
     "PromptEvidenceReceipt",
+    "PromotionGate",
+    "PromotionGateError",
     "ReadOnlyAuthorizationError",
     "ResolverRuntimeReceipt",
     "TrustActivation",

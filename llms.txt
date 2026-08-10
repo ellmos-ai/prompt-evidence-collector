@@ -14,6 +14,9 @@ Test-suite: 79 passed, 3 platform-specific skipped (pytest, Python 3.12.10)
 - **Local-Only Raw Store**: Raw text saved strictly at `<local-app-data>/prompt-evidence-collector/prompt-evidence/` with hardened folder permissions.
 - **Authorized One-Shot Capture**: Ed25519-signed `CaptureGrant` verification against local trust store, maximum 1-hour validity, single execution (`max_captures=1`).
 - **Cryptographic Receipts**: External projection limited to hashed receipts (codes, opaque IDs, SHA-256 hashes).
+- **Explicit Promotion Gate**: Captures persist as `not-reviewed`; candidate/curated transitions require an auditable local `PromotionGate` and never project raw text.
+- **Byte-Stable Raw Contract**: Strict UTF-8 bytes are hashed, written, and read without newline normalization across Windows and POSIX.
+- **Crash-Safe Pairing**: Raw and Receipt files use durable temporary objects, no-overwrite publication, a hash-/ID-only pair manifest, and fail-closed doctor inventory.
 - **Fail-Closed & Replay Protected**: Private SQLite ledger for atomic state tracking (`prepared`, `consumed`, `failed`), preventing replay attacks.
 - **Clutch Resolver Registry**: Immutable internal resolver registry preventing caller-injected execution.
 - **Fail-Closed Trust Enrollment**: Deterministic plan/apply workflow; signed activations resolve only through a fixed private bootstrap trust file, publish V2 constraints atomically, and never accept caller-selected trust roots.

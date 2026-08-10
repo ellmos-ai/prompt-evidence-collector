@@ -39,6 +39,39 @@ Zulässige Autoritätsquellen sind eine explizite Nutzerentscheidung, eine expli
 
 Live-Aktivierung, Trust-Key-Provisionierung und ellmos-core-Cutover bleiben eigene gegatete Schritte. Das Standardprofil bleibt passiv.
 
+## Explizites Curated-Gate und Integrität des Speichers
+
+Jeder Capture-Aufruf weist die Promotionsstatus `rejected`, `candidate` und
+`curated` zurück. Captures werden als `not-reviewed` gespeichert; eine Promotion
+ist die getrennte lokale Operation
+`PromptEvidenceCollector.transition_promotion(...)`. Sie erfordert ein
+`PromotionGate` (`ellmos.prompt-evidence-promotion-gate.v1`) mit der opaken
+Evidence-ID, Quell-/Zielstatus, einem expliziten Autoritätscode, einer
+Autorisierungsreferenz, UTC-Zeitstempel und einer selbstgebundenen
+`pg-<sha256>`-Gate-ID. Erlaubt sind `not-reviewed -> rejected|candidate` und
+`candidate -> rejected|curated`; Endzustände können nicht erneut promotet
+werden. Fehlende, fehlerhafte, veraltete oder widersprüchlich wiederholte Gates
+scheitern fail-closed mit `PromotionGateError`. Eine erfolgreiche Transition
+bewahrt Receipt-Schema, Evidence-ID, Content-Hash und Raw-Objekt; separat wird
+nur ein Receipt mit IDs/Hashes und Status im privaten Store protokolliert. Es
+gibt keinen Netzwerk- oder Provider-Hook und keine Rohtextprojektion.
+
+Rohtext hat einen expliziten Bytevertrag: Der nichtleere Python-String wird
+streng als UTF-8 kodiert, genau diese Bytes werden gehasht und ohne
+Zeilenendennormalisierung geschrieben und gelesen. LF, CRLF, gemischte
+Zeilenenden, abschließender Umbruch und Unicode bleiben unter Windows und POSIX
+unverändert. Veränderte Bytes oder ungültiges UTF-8 lösen
+`EvidenceIntegrityError` aus.
+
+Raw- und Receipt-Veröffentlichung nutzt ein privates Paarprotokoll: Temporäre
+Dateien werden in den gebundenen Verzeichnissen dauerhaft geschrieben,
+geflush't und synchronisiert, danach nicht überschreibend verlinkt. Ein
+ID-/Hash-only-Paarmanifest wird zuletzt festgeschrieben; Pending-, temporäre
+oder verwaiste Objekte werden niemals automatisch gelöscht.
+`prompt-evidence-collector doctor` inventarisiert sie und liefert Exitcode `3`
+bei einem unvollständigen/ungültigen Paar. Ein halbfertiges Paar gilt damit nie
+als gültige Evidence.
+
 ## Schreibgeschützter Autorisierungs-Preflight
 
 Die CLI prüft den bereits vorhandenen kanonischen privaten App-Store, ohne

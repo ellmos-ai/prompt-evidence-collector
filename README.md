@@ -67,6 +67,37 @@ Capture-Methoden sind nicht Teil der öffentlichen Collector-API.
 Live-Aktivierung, Trust-Key-Provisionierung und der ellmos-core-Cutover bleiben
 eigene gegatete Schritte; standardmäßig arbeitet das Modul passiv.
 
+## Explicit curated gate and storage integrity
+
+Every capture API rejects `rejected`, `candidate`, and `curated` promotion
+statuses. Captures persist as `not-reviewed`; promotion is a separate local
+`PromptEvidenceCollector.transition_promotion(...)` operation. It requires a
+`PromotionGate` (`ellmos.prompt-evidence-promotion-gate.v1`) containing the
+opaque evidence ID, source/target status, one of the explicit authority source
+codes, an authorization reference, a UTC timestamp, and a self-bound `pg-<sha256>`
+gate ID. Allowed transitions are `not-reviewed -> rejected|candidate` and
+`candidate -> rejected|curated`; terminal states cannot be promoted again.
+Missing, malformed, stale, or repeated conflicting gates fail closed with
+`PromotionGateError`. A successful transition preserves the existing receipt
+schema, evidence ID, content hash, and raw object; only a hash-/ID-only audit
+receipt is written under the private local store. No network, provider hook, or
+raw-text projection is involved.
+
+Raw content has an explicit byte contract: the API accepts a non-empty Python
+string, encodes it strictly as UTF-8, hashes those exact bytes, and writes and
+reads the bytes without newline normalization. LF, CRLF, mixed line endings,
+trailing newlines, and Unicode therefore round-trip identically on Windows and
+POSIX. A changed byte or invalid UTF-8 read fails with
+`EvidenceIntegrityError`.
+
+Raw and evidence receipt publication uses a private pair protocol. Durable
+temporary files are written inside their bound directories, flushed and synced,
+then published with no-overwrite links. A hash-/ID-only pair manifest is
+committed last; a pending marker and leftover temporary/orphan objects are
+never auto-deleted. `prompt-evidence-collector doctor` inventories these
+objects and returns exit code `3` for an incomplete or invalid pair, so no
+half-published pair is treated as valid evidence.
+
 ## Read-only authorization preflight
 
 The CLI can inspect the already existing canonical private app store without

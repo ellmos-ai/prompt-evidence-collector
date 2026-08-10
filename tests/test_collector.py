@@ -14,6 +14,8 @@ from prompt_evidence_collector.collector import (
     EvidenceNotFoundError,
     PromptEvidenceCollector,
     PromptEvidenceReceipt,
+    PromotionGate,
+    PromotionGateError,
     UnsafeEvidenceStoreError,
 )
 
@@ -507,3 +509,122 @@ def test_existing_reparse_object_is_rejected_without_read(
     with pytest.raises(EvidenceIntegrityError, match="reparse point"):
         capture(collector)
     assert read_attempted is False
+
+
+@pytest.mark.parametrize("promotion_status", ["rejected", "candidate", "curated"])
+def test_capture_cannot_promote_without_explicit_gate(collector, promotion_status):
+    with pytest.raises(PromotionGateError, match="explicit gate"):
+        collector._capture(
+            provider_code="clutch",
+            origin_code="clutch-session-store",
+            captured_at="2026-07-30T08:00:00Z",
+            raw_content="streng privat",
+            sensitivity_code="private",
+            retention_code="local-review",
+            promotion_status=promotion_status,
+        )
+
+
+def test_promotion_gate_is_audited_idempotent_and_preserves_identity(collector):
+    receipt = capture(collector)
+    gate = PromotionGate.build(
+        evidence_id=receipt.evidence_id,
+        from_status="not-reviewed",
+        to_status="candidate",
+        authority_source_code="explicit-user-decision",
+        authorization_ref="D-20260810-001",
+        issued_at="2026-08-10T08:00:00Z",
+    )
+
+    promoted = collector.transition_promotion(evidence_id=receipt.evidence_id, gate=gate)
+    repeated = collector.transition_promotion(evidence_id=receipt.evidence_id, gate=gate)
+
+    assert promoted.evidence_id == receipt.evidence_id
+    assert promoted.content_hash == receipt.content_hash
+    assert promoted.promotion_status == "candidate"
+    assert repeated == promoted
+    assert collector.read_raw(
+        receipt.evidence_id,
+        expected_hash=receipt.content_hash,
+    ) == "streng privat"
+    audit = json.loads(
+        (collector.promotion_dir / f"{gate.gate_id}.json").read_bytes().decode("utf-8")
+    )
+    assert "streng privat" not in json.dumps(audit)
+    assert audit["status"] == "applied"
+
+
+@pytest.mark.parametrize(
+    "gate_mutator",
+    [
+        lambda gate: {**gate.to_dict(), "to_status": "curated"},
+        lambda gate: {key: value for key, value in gate.to_dict().items() if key != "authorization_ref"},
+    ],
+)
+def test_invalid_or_stale_promotion_gate_fails_closed(collector, gate_mutator):
+    receipt = capture(collector)
+    gate = PromotionGate.build(
+        evidence_id=receipt.evidence_id,
+        from_status="not-reviewed",
+        to_status="candidate",
+        authority_source_code="explicit-capture-policy",
+        authorization_ref="policy-20260810-001",
+        issued_at="2026-08-10T08:00:00Z",
+    )
+    with pytest.raises(PromotionGateError):
+        collector.transition_promotion(
+            evidence_id=receipt.evidence_id,
+            gate=gate_mutator(gate),
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "erste\nzweite",
+        "erste\r\nzweite",
+        "erste\r\nzweite\n",
+        "erste\rzweite\n第三行\r\n",
+        "ümlaut\n雪\r\nfin",
+    ],
+)
+def test_raw_bytes_and_hash_are_stable_across_line_endings(collector, raw):
+    receipt = capture(collector, raw=raw, captured_at="2026-07-30T08:00:00Z")
+    expected = raw.encode("utf-8")
+    raw_path = collector.raw_dir / f"{receipt.evidence_id}.txt"
+
+    assert raw_path.read_bytes() == expected
+    assert receipt.content_hash == hashlib.sha256(expected).hexdigest()
+    assert collector.read_raw(receipt.evidence_id, expected_hash=receipt.content_hash) == raw
+
+
+def test_raw_byte_mutation_still_fails_closed(collector):
+    receipt = capture(collector, raw="erste\r\nzweite")
+    raw_path = collector.raw_dir / f"{receipt.evidence_id}.txt"
+    raw_path.write_bytes(raw_path.read_bytes() + b"x")
+    with pytest.raises(EvidenceIntegrityError):
+        collector.read_raw(receipt.evidence_id, expected_hash=receipt.content_hash)
+
+
+def test_doctor_detects_unpaired_and_temporary_capture_objects(collector, monkeypatch):
+    original = collector._publish_no_overwrite
+    calls = 0
+
+    def fail_after_raw(**kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(**kwargs)
+        if calls == 1:
+            raise OSError("simulated crash between pair commits")
+        return result
+
+    monkeypatch.setattr(collector, "_publish_no_overwrite", fail_after_raw)
+    with pytest.raises(OSError, match="simulated crash"):
+        capture(collector, raw="crash\r\nfixture")
+
+    inventory = collector.store_inventory()
+    assert inventory["status"] == "invalid"
+    assert inventory["incomplete_pair_count"] == 1
+    assert inventory["orphan_raw_count"] == 1
+    assert inventory["pending_pair_count"] == 1
+    assert inventory["temporary_file_count"] >= 2

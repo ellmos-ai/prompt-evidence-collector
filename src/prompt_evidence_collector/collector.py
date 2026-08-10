@@ -12,11 +12,12 @@ import re
 import stat
 import subprocess
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import UUID
+from uuid import uuid4
 
 from .authorization import (
     AuthorizedCaptureResult,
@@ -51,6 +52,10 @@ class EvidenceIntegrityError(PromptEvidenceError):
     """Receipt, Hash und Rohspeicher stimmen nicht überein."""
 
 
+class PromotionGateError(PromptEvidenceError):
+    """Eine Evidence-Promotion besitzt keinen gültigen expliziten Gate-Nachweis."""
+
+
 class PromptEvidenceLocatorLike(Protocol):
     """Minimaler Locatorvertrag für den passiven Clutch-Consumer."""
 
@@ -66,6 +71,14 @@ _ORIGINS = {"clutch-session-store", "provider-session-event", "local-import"}
 _SENSITIVITY = {"private", "restricted"}
 _RETENTION = {"session", "local-review", "until-curated", "legal-hold"}
 _PROMOTION = {"not-reviewed", "rejected", "candidate", "curated"}
+_PROMOTION_AUTHORITIES = {
+    "explicit-user-decision",
+    "explicit-capture-policy",
+    "delegated-decision-avatar",
+}
+_PROMOTION_GATE_SCHEMA = "ellmos.prompt-evidence-promotion-gate.v1"
+_PROMOTION_TRANSITION_SCHEMA = "ellmos.prompt-evidence-promotion-transition.v1"
+_PAIR_SCHEMA = "ellmos.prompt-evidence-pair.v1"
 _OPAQUE_ID = re.compile(r"^(?:pe|loc)-[0-9a-f]{64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _UTC_TIMESTAMP = re.compile(
@@ -135,6 +148,140 @@ _SYNC_PARTS = {
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    return _sha256_bytes(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def _raw_bytes(value: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise ValueError("raw_content must be a non-empty string")
+    return value.encode("utf-8", errors="strict")
+
+
+@dataclass(frozen=True)
+class PromotionGate:
+    """Expliziter, lokaler und auditierbarer Nachweis für genau eine Transition."""
+
+    schema: str
+    gate_id: str
+    evidence_id: str
+    from_status: str
+    to_status: str
+    authority_source_code: str
+    authorization_ref: str
+    issued_at: str
+
+    @classmethod
+    def from_dict(cls, value: object) -> "PromotionGate":
+        if not isinstance(value, dict):
+            raise PromotionGateError("promotion gate must be an object")
+        expected = {
+            "schema",
+            "gate_id",
+            "evidence_id",
+            "from_status",
+            "to_status",
+            "authority_source_code",
+            "authorization_ref",
+            "issued_at",
+        }
+        if set(value) != expected:
+            raise PromotionGateError("promotion gate fields do not match the schema")
+        try:
+            gate = cls(**value)
+        except (TypeError, ValueError) as error:
+            raise PromotionGateError("promotion gate fields are invalid") from error
+        gate.validate_structure()
+        return gate
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        evidence_id: str,
+        from_status: str,
+        to_status: str,
+        authority_source_code: str,
+        authorization_ref: str,
+        issued_at: str,
+    ) -> "PromotionGate":
+        body = {
+            "schema": _PROMOTION_GATE_SCHEMA,
+            "evidence_id": evidence_id,
+            "from_status": from_status,
+            "to_status": to_status,
+            "authority_source_code": authority_source_code,
+            "authorization_ref": authorization_ref,
+            "issued_at": issued_at,
+        }
+        gate = cls(
+            **body,
+            gate_id="pg-" + _canonical_sha256(body),
+        )
+        gate.validate_structure()
+        return gate
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def unsigned_body(self) -> dict[str, Any]:
+        value = self.to_dict()
+        value.pop("gate_id")
+        return value
+
+    def validate_structure(self) -> None:
+        if self.schema != _PROMOTION_GATE_SCHEMA:
+            raise PromotionGateError("unsupported promotion gate schema")
+        if not isinstance(self.gate_id, str) or not re.fullmatch(
+            r"^pg-[0-9a-f]{64}$", self.gate_id
+        ):
+            raise PromotionGateError("promotion gate ID is invalid")
+        if not isinstance(self.evidence_id, str) or not re.fullmatch(
+            r"^pe-[0-9a-f]{64}$", self.evidence_id
+        ):
+            raise PromotionGateError("promotion gate evidence ID is invalid")
+        if self.from_status not in _PROMOTION or self.to_status not in _PROMOTION:
+            raise PromotionGateError("promotion gate status is unsupported")
+        allowed = {
+            "not-reviewed": {"rejected", "candidate"},
+            "candidate": {"rejected", "curated"},
+            "rejected": set(),
+            "curated": set(),
+        }
+        if self.to_status not in allowed[self.from_status]:
+            raise PromotionGateError("promotion gate status transition is not allowed")
+        if self.authority_source_code not in _PROMOTION_AUTHORITIES:
+            raise PromotionGateError("promotion gate authority source is unsupported")
+        if not isinstance(self.authorization_ref, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:-]{1,127}", self.authorization_ref
+        ):
+            raise PromotionGateError("promotion gate authorization reference is invalid")
+        try:
+            _validate_utc_timestamp(self.issued_at)
+        except ValueError as error:
+            raise PromotionGateError("promotion gate timestamp is invalid") from error
+        expected_id = "pg-" + _canonical_sha256(self.unsigned_body())
+        if self.gate_id != expected_id:
+            raise PromotionGateError("promotion gate ID does not match its body")
+
+    def validate_against(self, receipt: "PromptEvidenceReceipt") -> None:
+        if self.evidence_id != receipt.evidence_id:
+            raise PromotionGateError("promotion gate evidence binding mismatch")
+        if self.from_status != receipt.promotion_status:
+            raise PromotionGateError("promotion gate source status is stale")
 
 
 @dataclass(frozen=True)
@@ -239,11 +386,17 @@ class PromptEvidenceCollector:
         self._prepare_secure_store(self.root)
         self.raw_dir = self.root / "raw"
         self.receipt_dir = self.root / "receipts"
+        self.pair_dir = self.root / "pairs"
+        self.promotion_dir = self.root / "promotion-transitions"
         self.raw_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.pair_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.promotion_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._store_root = self.root.resolve(strict=True)
         self._raw_root = self.raw_dir.resolve(strict=True)
         self._receipt_root = self.receipt_dir.resolve(strict=True)
+        self._pair_root = self.pair_dir.resolve(strict=True)
+        self._promotion_root = self.promotion_dir.resolve(strict=True)
         self._validate_current_store()
 
     def _capture(
@@ -260,30 +413,26 @@ class PromptEvidenceCollector:
         promotion_status: str = "not-reviewed",
     ) -> PromptEvidenceReceipt:
         """Erfasst Rohtext; das zurückgegebene Receipt bleibt cloud-safe."""
-        receipt = self._build_evidence_receipt(
-            provider_code=provider_code,
-            origin_code=origin_code,
-            captured_at=captured_at,
-            raw_content=raw_content,
-            sensitivity_code=sensitivity_code,
-            retention_code=retention_code,
-            source_locator_id=source_locator_id,
-            source_content_hash=source_content_hash,
-            promotion_status=promotion_status,
-        )
-        self._write_once(
-            self.raw_dir / f"{receipt.evidence_id}.txt",
-            raw_content,
-            expected_parent=self._raw_root,
-            suffix=".txt",
-        )
-        self._write_once(
-            self.receipt_dir / f"{receipt.evidence_id}.json",
-            json.dumps(receipt.to_dict(), ensure_ascii=False, sort_keys=True, indent=2),
-            expected_parent=self._receipt_root,
-            suffix=".json",
-        )
-        return receipt
+        if promotion_status not in _PROMOTION:
+            self._validate_codes(promotion_status=promotion_status)
+        if promotion_status != "not-reviewed":
+            raise PromotionGateError(
+                "capture cannot set promotion status; use transition_promotion with an explicit gate"
+            )
+        with store_lifecycle_lock(self._store_root):
+            receipt = self._build_evidence_receipt(
+                provider_code=provider_code,
+                origin_code=origin_code,
+                captured_at=captured_at,
+                raw_content=raw_content,
+                sensitivity_code=sensitivity_code,
+                retention_code=retention_code,
+                source_locator_id=source_locator_id,
+                source_content_hash=source_content_hash,
+                promotion_status="not-reviewed",
+            )
+            self._write_capture_pair(receipt=receipt, raw_content=raw_content)
+            return receipt
 
     def _build_evidence_receipt(
         self,
@@ -300,6 +449,12 @@ class PromptEvidenceCollector:
     ) -> PromptEvidenceReceipt:
         """Validate capture data and build a receipt without filesystem writes."""
         self._validate_current_store()
+        if promotion_status not in _PROMOTION:
+            self._validate_codes(promotion_status=promotion_status)
+        if promotion_status != "not-reviewed":
+            raise PromotionGateError(
+                "capture cannot set promotion status; use transition_promotion with an explicit gate"
+            )
         self._validate_codes(
             provider_code=provider_code,
             origin_code=origin_code,
@@ -308,8 +463,7 @@ class PromptEvidenceCollector:
             promotion_status=promotion_status,
         )
         _validate_utc_timestamp(captured_at)
-        if not isinstance(raw_content, str) or not raw_content:
-            raise ValueError("raw_content must be a non-empty string")
+        raw_value = _raw_bytes(raw_content)
         if (source_locator_id is None) != (source_content_hash is None):
             raise ValueError("source locator ID and hash must be supplied together")
         if source_locator_id is not None and not _OPAQUE_ID.fullmatch(source_locator_id):
@@ -317,7 +471,7 @@ class PromptEvidenceCollector:
         if source_content_hash is not None and not _SHA256.fullmatch(source_content_hash):
             raise ValueError("source content hash must be lowercase sha256")
 
-        content_hash = _sha256(raw_content)
+        content_hash = _sha256_bytes(raw_value)
         evidence_id = _prompt_evidence_id(
             provider_code=provider_code,
             origin_code=origin_code,
@@ -361,6 +515,12 @@ class PromptEvidenceCollector:
         ``authorize_and_capture_from_locator`` verwenden.
         """
         self._validate_current_store()
+        if promotion_status not in _PROMOTION:
+            self._validate_codes(promotion_status=promotion_status)
+        if promotion_status != "not-reviewed":
+            raise PromotionGateError(
+                "capture cannot set promotion status; use transition_promotion with an explicit gate"
+            )
         self._validate_codes(
             provider_code="clutch",
             origin_code="clutch-session-store",
@@ -386,6 +546,63 @@ class PromptEvidenceCollector:
             source_content_hash=locator.content_hash,
             promotion_status=promotion_status,
         )
+
+    def transition_promotion(
+        self,
+        *,
+        evidence_id: str,
+        gate: PromotionGate | dict[str, Any],
+    ) -> PromptEvidenceReceipt:
+        """Führt genau eine explizit autorisierte, lokale Promotion-Transition aus.
+
+        Capture bleibt unveränderlich ``not-reviewed``. Die Transition ändert nur
+        den Receipt-Status, bewahrt Evidence-ID/Hash und schreibt ein separates
+        Audit-Receipt ohne Rohtext.
+        """
+        parsed_gate = PromotionGate.from_dict(
+            gate.to_dict() if isinstance(gate, PromotionGate) else gate
+        )
+        with store_lifecycle_lock(self._store_root):
+            current = self.find_one(evidence_id=evidence_id)
+            transition_path = self._promotion_transition_path(parsed_gate.gate_id)
+            if transition_path.exists():
+                try:
+                    existing = self._read_json_bytes(transition_path)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise PromotionGateError(
+                        "existing promotion transition cannot be read"
+                    ) from error
+                if existing.get("gate") != parsed_gate.to_dict():
+                    raise PromotionGateError(
+                        "promotion gate ID is already bound to another transition"
+                    )
+                if current.promotion_status == parsed_gate.to_status:
+                    return current
+                raise PromotionGateError("promotion transition is incomplete")
+            parsed_gate.validate_against(current)
+
+            updated = replace(current, promotion_status=parsed_gate.to_status)
+            self._replace_receipt_for_transition(current=current, updated=updated)
+            audit = {
+                "schema": _PROMOTION_TRANSITION_SCHEMA,
+                "status": "applied",
+                "gate": parsed_gate.to_dict(),
+                "evidence_id": current.evidence_id,
+                "content_hash": current.content_hash,
+                "from_status": current.promotion_status,
+                "to_status": updated.promotion_status,
+            }
+            self._write_private_json_once(
+                transition_path,
+                audit,
+                expected_parent=self._promotion_root,
+                name_pattern=r"^pg-[0-9a-f]{64}\.json$",
+            )
+            return updated
+
+    # A short alias keeps the lifecycle operation discoverable for callers that
+    # use the domain verb instead of the explicit transition name.
+    promote = transition_promotion
 
     def authorize_and_capture_from_locator(
         self,
@@ -533,7 +750,7 @@ class PromptEvidenceCollector:
             raise EvidenceNotFoundError(
                 "prompt evidence locator resolved to no local content"
             )
-        if _sha256(raw_content) != locator.content_hash:
+        if _sha256_bytes(_raw_bytes(raw_content)) != locator.content_hash:
             raise EvidenceIntegrityError(
                 "prompt evidence locator content hash mismatch"
             )
@@ -554,20 +771,12 @@ class PromptEvidenceCollector:
         if os.name != "nt":
             os.chmod(directory, 0o700)
         path = directory / f"{grant_id}.json"
-        payload = json.dumps(
-            receipt,
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
-        ) + "\n"
+        payload = self._json_payload(receipt, trailing_newline=True)
         try:
-            with path.open("x", encoding="utf-8", newline="\n") as handle:
-                handle.write(payload)
-            if os.name != "nt":
-                os.chmod(path, 0o600)
+            self._write_durable_bytes(path, payload)
         except FileExistsError:
             try:
-                if path.read_text(encoding="utf-8") != payload:
+                if path.read_bytes() != payload:
                     raise EvidenceIntegrityError(
                         "existing capture consumption receipt conflicts"
                     )
@@ -607,7 +816,7 @@ class PromptEvidenceCollector:
         try:
             stage.mkdir(mode=0o700, parents=False, exist_ok=False)
             payloads = {
-                "raw.txt": raw_content,
+                "raw.txt": _raw_bytes(raw_content),
                 "evidence.json": json.dumps(
                     evidence_receipt.to_dict(),
                     ensure_ascii=False,
@@ -631,7 +840,9 @@ class PromptEvidenceCollector:
             }
             for name, payload in payloads.items():
                 path = stage / name
-                with path.open("x", encoding="utf-8", newline="\n") as handle:
+                if isinstance(payload, str):
+                    payload = payload.encode("utf-8", errors="strict")
+                with path.open("xb") as handle:
                     handle.write(payload)
                     handle.flush()
                     os.fsync(handle.fileno())
@@ -671,12 +882,18 @@ class PromptEvidenceCollector:
             ):
                 raise EvidenceIntegrityError("capture stage contains an unsafe object")
         try:
-            raw_content = (stage / "raw.txt").read_text(encoding="utf-8")
-            evidence_value = json.loads((stage / "evidence.json").read_text(encoding="utf-8"))
-            consumption_value = json.loads(
-                (stage / "consumption.json").read_text(encoding="utf-8")
+            raw_content = (stage / "raw.txt").read_bytes().decode(
+                "utf-8", errors="strict"
             )
-            binding = json.loads((stage / "binding.json").read_text(encoding="utf-8"))
+            evidence_value = json.loads(
+                (stage / "evidence.json").read_bytes().decode("utf-8", errors="strict")
+            )
+            consumption_value = json.loads(
+                (stage / "consumption.json").read_bytes().decode("utf-8", errors="strict")
+            )
+            binding = json.loads(
+                (stage / "binding.json").read_bytes().decode("utf-8", errors="strict")
+            )
             receipt = PromptEvidenceReceipt(**evidence_value)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise EvidenceIntegrityError("capture stage is invalid") from error
@@ -711,7 +928,7 @@ class PromptEvidenceCollector:
             raise EvidenceIntegrityError("capture stage consumption receipt is invalid")
         if expected_consumption is not None and consumption_value != expected_consumption:
             raise EvidenceIntegrityError("capture stage consumption receipt mismatch")
-        if _sha256(raw_content) != receipt.content_hash:
+        if _sha256_bytes(_raw_bytes(raw_content)) != receipt.content_hash:
             raise EvidenceIntegrityError("capture stage raw hash mismatch")
         return raw_content, receipt, consumption_value
 
@@ -731,23 +948,7 @@ class PromptEvidenceCollector:
         )
         if staged_receipt != evidence_receipt:
             raise EvidenceIntegrityError("capture stage evidence receipt changed")
-        self._write_once(
-            self.raw_dir / f"{evidence_receipt.evidence_id}.txt",
-            raw_content,
-            expected_parent=self._raw_root,
-            suffix=".txt",
-        )
-        self._write_once(
-            self.receipt_dir / f"{evidence_receipt.evidence_id}.json",
-            json.dumps(
-                evidence_receipt.to_dict(),
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            ),
-            expected_parent=self._receipt_root,
-            suffix=".json",
-        )
+        self._write_capture_pair(receipt=evidence_receipt, raw_content=raw_content)
         self._write_consumption_receipt(grant_id, consumption_receipt)
 
     def recover_prepared_capture(self, grant_id: str) -> AuthorizedCaptureResult:
@@ -900,6 +1101,73 @@ class PromptEvidenceCollector:
             )
         return matches[0]
 
+    def store_inventory(self) -> dict[str, Any]:
+        """Liest den Raw/Receipt-Pairzustand ohne Bereinigung oder Fremdänderung."""
+        self._validate_current_store(check_acl=False)
+        raw_ids = {
+            path.stem
+            for path in self.raw_dir.glob("pe-*.txt")
+            if path.is_file() and not path.is_symlink()
+        }
+        receipt_ids = {
+            path.stem
+            for path in self.receipt_dir.glob("pe-*.json")
+            if path.is_file() and not path.is_symlink()
+        }
+        pair_ids = {
+            path.stem
+            for path in self.pair_dir.glob("pe-*.json")
+            if path.is_file()
+            and not path.is_symlink()
+            and not path.name.endswith(".pending.json")
+        }
+        pending_ids = {
+            path.name.removesuffix(".pending.json")
+            for path in self.pair_dir.glob("pe-*.pending.json")
+            if path.is_file() and not path.is_symlink()
+        }
+        all_ids = raw_ids | receipt_ids | pair_ids | pending_ids
+        complete = 0
+        incomplete = 0
+        for evidence_id in sorted(all_ids):
+            try:
+                if evidence_id not in receipt_ids:
+                    raise EvidenceIntegrityError("receipt object is missing")
+                receipt = self._read_receipt(
+                    self.receipt_dir / f"{evidence_id}.json",
+                    self._receipt_root,
+                    check_pair=False,
+                )
+                self._assert_complete_pair(receipt)
+            except Exception:
+                incomplete += 1
+            else:
+                complete += 1
+        pending_count = len(pending_ids)
+        temporary_count = sum(
+            len(list(directory.glob("*.tmp")))
+            for directory in (self.raw_dir, self.receipt_dir, self.pair_dir)
+        )
+        orphan_raw = len(raw_ids - receipt_ids)
+        orphan_receipts = len(receipt_ids - raw_ids)
+        orphan_pairs = len(pair_ids - (raw_ids & receipt_ids))
+        invalid = incomplete > 0 or pending_count > 0 or temporary_count > 0
+        return {
+            "schema": "ellmos.prompt-evidence-collector-doctor.v2",
+            "status": "invalid" if invalid else "valid",
+            "raw_dir_exists": self.raw_dir.is_dir(),
+            "receipt_dir_exists": self.receipt_dir.is_dir(),
+            "receipt_count": len(receipt_ids),
+            "pair_count": len(pair_ids),
+            "complete_pair_count": complete,
+            "incomplete_pair_count": incomplete,
+            "orphan_raw_count": orphan_raw,
+            "orphan_receipt_count": orphan_receipts,
+            "orphan_pair_count": orphan_pairs,
+            "pending_pair_count": pending_count,
+            "temporary_file_count": temporary_count,
+        }
+
     def read_raw(self, evidence_id: str, *, expected_hash: str) -> str:
         """Liest Rohtext lokal nach strikter ID- und Hash-Prüfung."""
         self._validate_current_store()
@@ -908,13 +1176,17 @@ class PromptEvidenceCollector:
         receipt = self.find_one(evidence_id=evidence_id)
         if receipt.content_hash != expected_hash:
             raise EvidenceIntegrityError("prompt evidence hash mismatch")
-        raw_path = self._validated_raw_path(receipt.evidence_id)
+        raw_path = self._validated_raw_path(receipt.evidence_id, require_exists=False)
         try:
-            raw_content = raw_path.read_text(encoding="utf-8")
+            raw_bytes = raw_path.read_bytes()
         except FileNotFoundError as error:
             raise EvidenceNotFoundError("prompt evidence raw object is missing") from error
-        if _sha256(raw_content) != expected_hash:
+        if _sha256_bytes(raw_bytes) != expected_hash:
             raise EvidenceIntegrityError("prompt evidence integrity check failed")
+        try:
+            raw_content = raw_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise EvidenceIntegrityError("prompt evidence raw object is not valid UTF-8") from error
         self._validate_current_store(check_acl=False)
         self._validated_store_child(
             raw_path,
@@ -953,6 +1225,16 @@ class PromptEvidenceCollector:
             self._receipt_root,
             "receipt",
         )
+        self._validate_store_directory(
+            self.pair_dir,
+            self._pair_root,
+            "pair",
+        )
+        self._validate_store_directory(
+            self.promotion_dir,
+            self._promotion_root,
+            "promotion",
+        )
 
     @classmethod
     def _validate_store_directory(
@@ -979,7 +1261,7 @@ class PromptEvidenceCollector:
                 f"{label} evidence directory mode is not private"
             )
 
-    def _validated_raw_path(self, evidence_id: str) -> Path:
+    def _validated_raw_path(self, evidence_id: str, *, require_exists: bool = True) -> Path:
         if not isinstance(evidence_id, str) or not re.fullmatch(
             r"^pe-[0-9a-f]{64}$",
             evidence_id,
@@ -991,7 +1273,7 @@ class PromptEvidenceCollector:
                 candidate,
                 expected_parent=self._raw_root,
                 suffix=".txt",
-                require_exists=True,
+                require_exists=require_exists,
             )
         except FileNotFoundError as error:
             raise EvidenceNotFoundError(
@@ -1021,12 +1303,22 @@ class PromptEvidenceCollector:
         suffix: str,
         require_exists: bool,
     ) -> Path:
-        expected_name = re.compile(
-            rf"^pe-[0-9a-f]{{64}}{re.escape(suffix)}$"
+        return self._validated_named_child(
+            path,
+            expected_parent=expected_parent,
+            name_pattern=rf"^pe-[0-9a-f]{{64}}{re.escape(suffix)}$",
+            require_exists=require_exists,
         )
-        if path.parent != expected_parent or not expected_name.fullmatch(
-            path.name
-        ):
+
+    def _validated_named_child(
+        self,
+        path: Path,
+        *,
+        expected_parent: Path,
+        name_pattern: str,
+        require_exists: bool,
+    ) -> Path:
+        if path.parent != expected_parent or not re.fullmatch(name_pattern, path.name):
             raise EvidenceIntegrityError(
                 "evidence object path is outside its bound store"
             )
@@ -1454,6 +1746,388 @@ class PromptEvidenceCollector:
         if not current_full_control:
             raise UnsafeEvidenceStoreError("current principal lacks explicit FullControl")
 
+    @staticmethod
+    def _json_payload(value: object, *, trailing_newline: bool = False) -> bytes:
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        ).encode("utf-8", errors="strict")
+        return payload + (b"\n" if trailing_newline else b"")
+
+    @staticmethod
+    def _read_json_bytes(path: Path) -> dict[str, Any]:
+        value = json.loads(path.read_bytes().decode("utf-8", errors="strict"))
+        if not isinstance(value, dict):
+            raise ValueError("JSON value must be an object")
+        return value
+
+    def _promotion_transition_path(self, gate_id: str) -> Path:
+        if not re.fullmatch(r"^pg-[0-9a-f]{64}$", gate_id):
+            raise PromotionGateError("promotion gate ID is invalid")
+        return self._validated_named_child(
+            self.promotion_dir / f"{gate_id}.json",
+            expected_parent=self._promotion_root,
+            name_pattern=r"^pg-[0-9a-f]{64}\.json$",
+            require_exists=False,
+        )
+
+    def _pair_path(self, evidence_id: str) -> Path:
+        if not re.fullmatch(r"^pe-[0-9a-f]{64}$", evidence_id):
+            raise EvidenceIntegrityError("invalid prompt evidence identifier")
+        return self._validated_named_child(
+            self.pair_dir / f"{evidence_id}.json",
+            expected_parent=self._pair_root,
+            name_pattern=r"^pe-[0-9a-f]{64}\.json$",
+            require_exists=False,
+        )
+
+    def _pending_pair_path(self, evidence_id: str) -> Path:
+        return self._validated_named_child(
+            self.pair_dir / f"{evidence_id}.pending.json",
+            expected_parent=self._pair_root,
+            name_pattern=r"^pe-[0-9a-f]{64}\.pending\.json$",
+            require_exists=False,
+        )
+
+    def _temp_path(
+        self,
+        *,
+        parent: Path,
+        evidence_id: str,
+        token: str,
+        kind: str,
+    ) -> Path:
+        if kind not in {"raw", "receipt", "pair"} or not re.fullmatch(
+            r"[0-9a-f]{32}", token
+        ):
+            raise EvidenceIntegrityError("invalid capture pair temporary object")
+        return self._validated_named_child(
+            parent / f"{evidence_id}.{token}.{kind}.tmp",
+            expected_parent=parent,
+            name_pattern=rf"^pe-[0-9a-f]{{64}}\.[0-9a-f]{{32}}\.{kind}\.tmp$",
+            require_exists=False,
+        )
+
+    def _write_durable_bytes(self, path: Path, payload: bytes) -> None:
+        with path.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+        self._fsync_directory(path.parent)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            return
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        finally:
+            os.close(descriptor)
+
+    def _write_private_bytes_once(
+        self,
+        path: Path,
+        payload: bytes,
+        *,
+        expected_parent: Path,
+        name_pattern: str,
+    ) -> None:
+        self._validated_named_child(
+            path,
+            expected_parent=expected_parent,
+            name_pattern=name_pattern,
+            require_exists=False,
+        )
+        try:
+            self._write_durable_bytes(path, payload)
+        except FileExistsError:
+            existing = self._validated_named_child(
+                path,
+                expected_parent=expected_parent,
+                name_pattern=name_pattern,
+                require_exists=True,
+            )
+            if existing.read_bytes() != payload:
+                raise EvidenceIntegrityError(
+                    "existing private evidence object conflicts"
+                ) from None
+        self._validated_named_child(
+            path,
+            expected_parent=expected_parent,
+            name_pattern=name_pattern,
+            require_exists=True,
+        )
+
+    def _write_private_json_once(
+        self,
+        path: Path,
+        value: object,
+        *,
+        expected_parent: Path,
+        name_pattern: str,
+    ) -> None:
+        self._write_private_bytes_once(
+            path,
+            self._json_payload(value),
+            expected_parent=expected_parent,
+            name_pattern=name_pattern,
+        )
+
+    def _publish_no_overwrite(
+        self,
+        *,
+        temporary: Path,
+        target: Path,
+        expected_parent: Path,
+        target_pattern: str,
+        temporary_pattern: str,
+    ) -> None:
+        self._validated_named_child(
+            temporary,
+            expected_parent=expected_parent,
+            name_pattern=temporary_pattern,
+            require_exists=True,
+        )
+        self._validated_named_child(
+            target,
+            expected_parent=expected_parent,
+            name_pattern=target_pattern,
+            require_exists=False,
+        )
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            existing = self._validated_named_child(
+                target,
+                expected_parent=expected_parent,
+                name_pattern=target_pattern,
+                require_exists=True,
+            )
+            if existing.read_bytes() != temporary.read_bytes():
+                raise EvidenceIntegrityError(
+                    "existing capture pair object conflicts"
+                ) from None
+        else:
+            self._fsync_directory(expected_parent)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        self._fsync_directory(expected_parent)
+
+    def _write_capture_pair(
+        self,
+        *,
+        receipt: PromptEvidenceReceipt,
+        raw_content: str,
+    ) -> None:
+        raw_payload = _raw_bytes(raw_content)
+        receipt_payload = self._json_payload(receipt.to_dict())
+        raw_path = self._validated_raw_path(receipt.evidence_id, require_exists=False)
+        receipt_path = self._validated_named_child(
+            self.receipt_dir / f"{receipt.evidence_id}.json",
+            expected_parent=self._receipt_root,
+            name_pattern=r"^pe-[0-9a-f]{64}\.json$",
+            require_exists=False,
+        )
+        pair_path = self._pair_path(receipt.evidence_id)
+        pending_path = self._pending_pair_path(receipt.evidence_id)
+        final_paths = (raw_path, receipt_path, pair_path)
+        present = [path.exists() for path in final_paths]
+        if all(present):
+            existing = self._read_receipt(receipt_path, self._receipt_root, check_pair=False)
+            self._assert_complete_pair(existing, allow_pending=True)
+            if (
+                existing == receipt
+                and raw_path.read_bytes() == raw_payload
+                and receipt_path.read_bytes() == receipt_payload
+            ):
+                if pending_path.exists():
+                    pending_path.unlink()
+                    self._fsync_directory(self._pair_root)
+                return
+            raise EvidenceIntegrityError("existing capture pair conflicts with capture")
+        if any(present) or pending_path.exists():
+            raise EvidenceIntegrityError(
+                "capture pair is incomplete; inspect doctor before retrying"
+            )
+
+        pending = {
+            "schema": _PAIR_SCHEMA,
+            "status": "incomplete",
+            "evidence_id": receipt.evidence_id,
+            "raw_object_id": receipt.raw_object_id,
+            "content_hash": receipt.content_hash,
+        }
+        self._write_private_json_once(
+            pending_path,
+            pending,
+            expected_parent=self._pair_root,
+            name_pattern=r"^pe-[0-9a-f]{64}\.pending\.json$",
+        )
+        token = uuid4().hex
+        raw_temp = self._temp_path(
+            parent=self._raw_root,
+            evidence_id=receipt.evidence_id,
+            token=token,
+            kind="raw",
+        )
+        receipt_temp = self._temp_path(
+            parent=self._receipt_root,
+            evidence_id=receipt.evidence_id,
+            token=token,
+            kind="receipt",
+        )
+        pair_temp = self._temp_path(
+            parent=self._pair_root,
+            evidence_id=receipt.evidence_id,
+            token=token,
+            kind="pair",
+        )
+        pair_manifest = {
+            "schema": _PAIR_SCHEMA,
+            "status": "complete",
+            "evidence_id": receipt.evidence_id,
+            "raw_object_id": receipt.raw_object_id,
+            "content_hash": receipt.content_hash,
+            "receipt_sha256": _sha256_bytes(receipt_payload),
+        }
+        self._write_durable_bytes(raw_temp, raw_payload)
+        self._write_durable_bytes(receipt_temp, receipt_payload)
+        self._write_durable_bytes(pair_temp, self._json_payload(pair_manifest))
+        self._publish_no_overwrite(
+            temporary=raw_temp,
+            target=raw_path,
+            expected_parent=self._raw_root,
+            target_pattern=r"^pe-[0-9a-f]{64}\.txt$",
+            temporary_pattern=rf"^pe-[0-9a-f]{{64}}\.{token}\.raw\.tmp$",
+        )
+        self._publish_no_overwrite(
+            temporary=receipt_temp,
+            target=receipt_path,
+            expected_parent=self._receipt_root,
+            target_pattern=r"^pe-[0-9a-f]{64}\.json$",
+            temporary_pattern=rf"^pe-[0-9a-f]{{64}}\.{token}\.receipt\.tmp$",
+        )
+        self._publish_no_overwrite(
+            temporary=pair_temp,
+            target=pair_path,
+            expected_parent=self._pair_root,
+            target_pattern=r"^pe-[0-9a-f]{64}\.json$",
+            temporary_pattern=rf"^pe-[0-9a-f]{{64}}\.{token}\.pair\.tmp$",
+        )
+        pending_path.unlink()
+        self._fsync_directory(self._pair_root)
+
+    def _assert_complete_pair(
+        self,
+        receipt: PromptEvidenceReceipt,
+        *,
+        allow_pending: bool = False,
+    ) -> None:
+        if not allow_pending and self._pending_pair_path(receipt.evidence_id).exists():
+            raise EvidenceIntegrityError("capture pair has an unfinished commit marker")
+        temporary_pattern = re.compile(rf"^{re.escape(receipt.evidence_id)}\.[0-9a-f]{{32}}\..+\.tmp$")
+        if any(
+            path.name
+            for directory in (self.raw_dir, self.receipt_dir, self.pair_dir)
+            for path in directory.iterdir()
+            if temporary_pattern.fullmatch(path.name)
+        ):
+            raise EvidenceIntegrityError("capture pair has unfinished temporary objects")
+        pair_path = self._pair_path(receipt.evidence_id)
+        try:
+            manifest = self._read_json_bytes(
+                self._validated_named_child(
+                    pair_path,
+                    expected_parent=self._pair_root,
+                    name_pattern=r"^pe-[0-9a-f]{64}\.json$",
+                    require_exists=True,
+                )
+            )
+            receipt_path = self._validated_named_child(
+                self.receipt_dir / f"{receipt.evidence_id}.json",
+                expected_parent=self._receipt_root,
+                name_pattern=r"^pe-[0-9a-f]{64}\.json$",
+                require_exists=True,
+            )
+            raw_path = self._validated_raw_path(receipt.evidence_id)
+            receipt_payload = receipt_path.read_bytes()
+            raw_payload = raw_path.read_bytes()
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            raise EvidenceIntegrityError("capture pair is incomplete or invalid") from error
+        expected = {
+            "schema",
+            "status",
+            "evidence_id",
+            "raw_object_id",
+            "content_hash",
+            "receipt_sha256",
+        }
+        if set(manifest) != expected or manifest.get("schema") != _PAIR_SCHEMA:
+            raise EvidenceIntegrityError("capture pair manifest is invalid")
+        if (
+            manifest.get("status") != "complete"
+            or manifest.get("evidence_id") != receipt.evidence_id
+            or manifest.get("raw_object_id") != receipt.raw_object_id
+            or manifest.get("content_hash") != receipt.content_hash
+            or manifest.get("receipt_sha256") != _sha256_bytes(receipt_payload)
+            or _sha256_bytes(raw_payload) != receipt.content_hash
+        ):
+            raise EvidenceIntegrityError("capture pair integrity check failed")
+
+    def _replace_receipt_for_transition(
+        self,
+        *,
+        current: PromptEvidenceReceipt,
+        updated: PromptEvidenceReceipt,
+    ) -> None:
+        receipt_path = self._validated_named_child(
+            self.receipt_dir / f"{current.evidence_id}.json",
+            expected_parent=self._receipt_root,
+            name_pattern=r"^pe-[0-9a-f]{64}\.json$",
+            require_exists=True,
+        )
+        current_payload = receipt_path.read_bytes()
+        if self._read_receipt(receipt_path, self._receipt_root, check_pair=False) != current:
+            raise PromotionGateError("receipt changed before promotion transition")
+        self._assert_complete_pair(current)
+        updated_payload = self._json_payload(updated.to_dict())
+        token = uuid4().hex
+        temporary = self._temp_path(
+            parent=self._receipt_root,
+            evidence_id=current.evidence_id,
+            token=token,
+            kind="receipt",
+        )
+        self._write_durable_bytes(temporary, updated_payload)
+        os.replace(temporary, receipt_path)
+        self._fsync_directory(self._receipt_root)
+
+        pair_path = self._pair_path(current.evidence_id)
+        manifest = self._read_json_bytes(pair_path)
+        if manifest.get("receipt_sha256") != _sha256_bytes(current_payload):
+            raise PromotionGateError("capture pair manifest changed before transition")
+        manifest["receipt_sha256"] = _sha256_bytes(updated_payload)
+        pair_temp = self._temp_path(
+            parent=self._pair_root,
+            evidence_id=current.evidence_id,
+            token=uuid4().hex,
+            kind="pair",
+        )
+        self._write_durable_bytes(pair_temp, self._json_payload(manifest))
+        os.replace(pair_temp, pair_path)
+        self._fsync_directory(self._pair_root)
+
     def _write_once(
         self,
         path: Path,
@@ -1463,40 +2137,19 @@ class PromptEvidenceCollector:
         suffix: str,
     ) -> None:
         self._validate_current_store(check_acl=False)
-        self._validated_store_child(
+        self._write_private_bytes_once(
             path,
+            content.encode("utf-8", errors="strict"),
             expected_parent=expected_parent,
-            suffix=suffix,
-            require_exists=False,
-        )
-        try:
-            with path.open("x", encoding="utf-8", newline="\n") as handle:
-                handle.write(content)
-            if os.name != "nt":
-                os.chmod(path, 0o600)
-        except FileExistsError:
-            existing = self._validated_store_child(
-                path,
-                expected_parent=expected_parent,
-                suffix=suffix,
-                require_exists=True,
-            )
-            if existing.read_text(encoding="utf-8") != content:
-                raise EvidenceIntegrityError(
-                    "existing prompt evidence object conflicts with capture"
-                ) from None
-        self._validate_current_store(check_acl=False)
-        self._validated_store_child(
-            path,
-            expected_parent=expected_parent,
-            suffix=suffix,
-            require_exists=True,
+            name_pattern=rf"^pe-[0-9a-f]{{64}}{re.escape(suffix)}$",
         )
 
     def _read_receipt(
         self,
         path: Path,
         receipt_root: Path,
+        *,
+        check_pair: bool = True,
     ) -> PromptEvidenceReceipt:
         try:
             self._validate_current_store(check_acl=False)
@@ -1506,7 +2159,7 @@ class PromptEvidenceCollector:
                 suffix=".json",
                 require_exists=True,
             )
-            value = json.loads(resolved.read_text(encoding="utf-8"))
+            value = json.loads(resolved.read_bytes().decode("utf-8", errors="strict"))
             if not isinstance(value, dict):
                 raise TypeError("receipt must be a JSON object")
             expected_fields = {
@@ -1528,6 +2181,8 @@ class PromptEvidenceCollector:
             suffix=".json",
             require_exists=True,
         )
+        if check_pair:
+            self._assert_complete_pair(receipt)
         return receipt
 
 
