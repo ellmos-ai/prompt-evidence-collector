@@ -11,13 +11,13 @@ import os
 import re
 import stat
 import subprocess
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Protocol
-from uuid import UUID
-from uuid import uuid4
+from typing import Any, Protocol
+from uuid import UUID, uuid4
 
 from .authorization import (
     AuthorizedCaptureResult,
@@ -216,7 +216,7 @@ class PromotionGate:
     issued_at: str
 
     @classmethod
-    def from_dict(cls, value: object) -> "PromotionGate":
+    def from_dict(cls, value: object) -> PromotionGate:
         if not isinstance(value, dict):
             raise PromotionGateError("promotion gate must be an object")
         expected = {
@@ -248,7 +248,7 @@ class PromotionGate:
         authority_source_code: str,
         authorization_ref: str,
         issued_at: str,
-    ) -> "PromotionGate":
+    ) -> PromotionGate:
         body = {
             "schema": _PROMOTION_GATE_SCHEMA,
             "evidence_id": evidence_id,
@@ -313,7 +313,7 @@ class PromotionGate:
         if self.gate_id != expected_id:
             raise PromotionGateError("promotion gate ID does not match its body")
 
-    def validate_against(self, receipt: "PromptEvidenceReceipt") -> None:
+    def validate_against(self, receipt: PromptEvidenceReceipt) -> None:
         if self.evidence_id != receipt.evidence_id:
             raise PromotionGateError("promotion gate evidence binding mismatch")
         if self.from_status != receipt.promotion_status:
@@ -544,7 +544,9 @@ class PromptEvidenceCollector:
         )
         _validate_utc_timestamp(captured_at)
         if not callable(resolve_content):
-            raise ValueError("resolve_content must be callable")
+            # ValueError kept intentionally (public API contract); not TypeError
+            # per ruff TRY004 — changing it would be a breaking behavior change.
+            raise ValueError("resolve_content must be callable")  # noqa: TRY004
 
         self._validate_clutch_locator(locator)
         raw_content = self._resolve_locator_content(locator, resolve_content)
@@ -1860,7 +1862,9 @@ class PromptEvidenceCollector:
     def _read_json_bytes(path: Path) -> dict[str, Any]:
         value = json.loads(path.read_bytes().decode("utf-8", errors="strict"))
         if not isinstance(value, dict):
-            raise ValueError("JSON value must be an object")
+            # ValueError kept intentionally (public API contract); not TypeError
+            # per ruff TRY004 — changing it would be a breaking behavior change.
+            raise ValueError("JSON value must be an object")  # noqa: TRY004
         return value
 
     def _promotion_transition_path(self, gate_id: str) -> Path:

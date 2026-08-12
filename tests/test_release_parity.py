@@ -7,7 +7,6 @@ from pathlib import Path
 from prompt_evidence_collector import __version__
 from prompt_evidence_collector._version import __version__ as source_version
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

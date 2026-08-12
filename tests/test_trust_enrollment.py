@@ -11,8 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from types import MethodType
+from types import MethodType, SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -38,7 +37,6 @@ from prompt_evidence_collector.trust_enrollment import (
     TrustProposal,
     build_plan,
 )
-
 
 # Keep validity fixtures relative to the execution date so CI cannot expire
 # merely because the repository is tested after the original fixture day.

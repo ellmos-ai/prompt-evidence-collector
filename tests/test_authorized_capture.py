@@ -15,6 +15,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from prompt_evidence_collector.adapters.clutch import (
+    resolve_content as registered_resolver,
+)
 from prompt_evidence_collector.authorization import (
     ACTION_CODE,
     GRANT_SCHEMA,
@@ -22,9 +25,9 @@ from prompt_evidence_collector.authorization import (
     TRUST_SCHEMA,
     CaptureAuthorizationError,
     CaptureGrant,
-    CaptureGrantVerifier,
     CaptureGrantLedger,
     CaptureGrantReplayError,
+    CaptureGrantVerifier,
     CaptureRecoveryRequiredError,
     ResolverRuntimeReceipt,
     callable_fingerprint,
@@ -32,17 +35,14 @@ from prompt_evidence_collector.authorization import (
     canonical_sha256,
     resolver_identity,
 )
-from prompt_evidence_collector.cli import _read_local_json, main as cli_main
+from prompt_evidence_collector.cli import _read_local_json
+from prompt_evidence_collector.cli import main as cli_main
 from prompt_evidence_collector.collector import (
     EvidenceIntegrityError,
     EvidenceNotFoundError,
     PromptEvidenceCollector,
     UnsafeEvidenceStoreError,
 )
-from prompt_evidence_collector.adapters.clutch import (
-    resolve_content as registered_resolver,
-)
-
 
 RAW = "synthetic-authorized-capture"
 

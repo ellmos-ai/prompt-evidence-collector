@@ -19,11 +19,12 @@ import re
 import secrets
 import sqlite3
 import stat
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -113,9 +114,7 @@ def _closed_mapping(value: object, fields: set[str], label: str) -> dict[str, An
 
 
 def _utc(value: object, label: str) -> datetime:
-    if not isinstance(value, str) or not (
-        value.endswith("Z") or value.endswith("+00:00")
-    ):
+    if not isinstance(value, str) or not value.endswith(("Z", "+00:00")):
         raise CaptureAuthorizationError(f"{label} must be an explicit UTC timestamp")
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:

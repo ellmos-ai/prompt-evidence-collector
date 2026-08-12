@@ -26,10 +26,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .authorization import (
     AUTHORITY_SOURCE_CODES,
-    CaptureAuthorizationError,
-    CaptureGrantVerifier,
     PURPOSE_CODES,
     TRUST_SCHEMA_V2,
+    CaptureAuthorizationError,
+    CaptureGrantVerifier,
     canonical_bytes,
     canonical_sha256,
     utc_text,
@@ -40,7 +40,6 @@ from .collector import (
     UnsafeEvidenceStoreError,
     store_lifecycle_lock,
 )
-
 
 PROPOSAL_SCHEMA = "ellmos.prompt-evidence-trust-proposal.v1"
 PLAN_SCHEMA = "ellmos.prompt-evidence-trust-enrollment-plan.v1"
@@ -87,7 +86,7 @@ def _reject_private_material(value: object, *, label: str = "document") -> None:
 
 
 def _utc(value: object, label: str) -> datetime:
-    if not isinstance(value, str) or not (value.endswith("Z") or value.endswith("+00:00")):
+    if not isinstance(value, str) or not value.endswith(("Z", "+00:00")):
         raise TrustEnrollmentError(f"{label} must be an explicit UTC timestamp")
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
@@ -150,7 +149,7 @@ class TrustProposal:
     keys: list[dict[str, Any]]
 
     @classmethod
-    def from_dict(cls, value: object) -> "TrustProposal":
+    def from_dict(cls, value: object) -> TrustProposal:
         _reject_private_material(value, label="trust proposal")
         root = _closed(
             value,
@@ -293,7 +292,7 @@ class TrustActivation:
     signature: str
 
     @classmethod
-    def from_dict(cls, value: object) -> "TrustActivation":
+    def from_dict(cls, value: object) -> TrustActivation:
         _reject_private_material(value, label="trust activation")
         root = _closed(value, set(cls.__dataclass_fields__), "trust activation")
         activation = cls(**root)

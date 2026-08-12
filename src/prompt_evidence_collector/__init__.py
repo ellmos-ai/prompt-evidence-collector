@@ -1,17 +1,6 @@
 """Standalone prompt evidence collector."""
 
-from .collector import (
-    AmbiguousEvidenceError,
-    EvidenceIntegrityError,
-    EvidenceNotFoundError,
-    PromptEvidenceCollector,
-    PromptEvidenceError,
-    PromptEvidenceLocatorLike,
-    PromptEvidenceReceipt,
-    PromotionGate,
-    PromotionGateError,
-    UnsafeEvidenceStoreError,
-)
+from ._version import __version__
 from .authorization import (
     AuthorizedCaptureResult,
     CaptureAuthorizationError,
@@ -21,14 +10,27 @@ from .authorization import (
     ReadOnlyAuthorizationError,
     ResolverRuntimeReceipt,
 )
+from .collector import (
+    AmbiguousEvidenceError,
+    EvidenceIntegrityError,
+    EvidenceNotFoundError,
+    PromotionGate,
+    PromotionGateError,
+    PromptEvidenceCollector,
+    PromptEvidenceError,
+    PromptEvidenceLocatorLike,
+    PromptEvidenceReceipt,
+    UnsafeEvidenceStoreError,
+)
 from .trust_enrollment import (
     TrustActivation,
     TrustEnroller,
     TrustEnrollmentError,
     TrustProposal,
+)
+from .trust_enrollment import (
     build_plan as build_trust_enrollment_plan,
 )
-from ._version import __version__
 
 __all__ = [
     "AmbiguousEvidenceError",
@@ -39,12 +41,12 @@ __all__ = [
     "CaptureRecoveryRequiredError",
     "EvidenceIntegrityError",
     "EvidenceNotFoundError",
+    "PromotionGate",
+    "PromotionGateError",
     "PromptEvidenceCollector",
     "PromptEvidenceError",
     "PromptEvidenceLocatorLike",
     "PromptEvidenceReceipt",
-    "PromotionGate",
-    "PromotionGateError",
     "ReadOnlyAuthorizationError",
     "ResolverRuntimeReceipt",
     "TrustActivation",
@@ -52,6 +54,6 @@ __all__ = [
     "TrustEnrollmentError",
     "TrustProposal",
     "UnsafeEvidenceStoreError",
-    "build_trust_enrollment_plan",
     "__version__",
+    "build_trust_enrollment_plan",
 ]
