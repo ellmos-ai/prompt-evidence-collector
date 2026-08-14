@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@600;800;900&amp;family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap');
+      
+      .title {
+        font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 900;
+        letter-spacing: -1.5px;
+      }
+      .subtitle {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 500;
+        letter-spacing: -0.2px;
+      }
+      .badge-text {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+      }
+      .pill-text {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 700;
+        font-size: 11.5px;
+        letter-spacing: 0.5px;
+      }
+      .mono-code {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+      }
+    </style>
+    
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#04120e"/>
+      <stop offset="50%" stop-color="#082b20"/>
+      <stop offset="100%" stop-color="#020a07"/>
+    </linearGradient>
+    <linearGradient id="title-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="50%" stop-color="#2dd4bf"/>
+      <stop offset="100%" stop-color="#a7f3d0"/>
+    </linearGradient>
+    <radialGradient id="glow-emerald" cx="300" cy="170" r="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#04120e" stop-opacity="0"/>
+    </radialGradient>
+    
+  </defs>
+  
+  
+    <rect width="1200" height="340" fill="url(#bg)"/>
+    <rect width="1200" height="340" fill="none" stroke="#10b981" stroke-width="2" stroke-opacity="0.2"/>
+    <circle cx="300" cy="170" r="260" fill="url(#glow-emerald)"/>
+    
+    <!-- Token Streams & Evidence Chain -->
+    <g transform="translate(160, 65)">
+      <!-- Chain ledger blocks -->
+      <rect x="20" y="30" width="80" height="50" rx="8" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+      <text x="60" y="60" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#a7f3d0">#HASH_01</text>
+      
+      <line x1="100" y1="55" x2="130" y2="55" stroke="#34d399" stroke-width="2" stroke-dasharray="3 3"/>
+      
+      <rect x="130" y="30" width="80" height="50" rx="8" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+      <text x="170" y="60" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#a7f3d0">#HASH_02</text>
+      
+      <!-- Magnifier / Audit Lens -->
+      <circle cx="110" cy="130" r="35" fill="#022c22" stroke="#6ee7b7" stroke-width="2.5" opacity="0.9"/>
+      <line x1="135" y1="155" x2="165" y2="185" stroke="#6ee7b7" stroke-width="5" stroke-linecap="round"/>
+      <path d="M98 130 L107 139 L124 122" stroke="#34d399" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </g>
+    
+  
+    <g transform="translate(480, 0)">
+      <g transform="translate(0, 58)">
+        <rect width="190" height="26" rx="6" fill="#064e3b" stroke="#34d399" stroke-width="1"/>
+        <text x="95" y="17" text-anchor="middle" class="badge-text" fill="#a7f3d0">PROVENANCE &amp; AUDIT</text>
+      </g>
+      
+      <text x="0" y="142" class="title" font-size="46" fill="url(#title-grad)">prompt-evidence-collector</text>
+      
+      <text x="0" y="184" class="subtitle" font-size="20" fill="#d1fae5">Deterministic Prompt Execution Tracing &amp; Evidence Log</text>
+      <text x="0" y="210" class="subtitle" font-size="14" fill="#94a3b8" opacity="0.8">Capturing, indexing, and cryptographically validating prompt execution traces.</text>
+      
+      <g transform="translate(0, 246)">
+        <g transform="translate(0, 0)">
+          <rect width="145" height="32" rx="8" fill="#022c22" stroke="#34d399" stroke-width="1.5"/>
+          <text x="72" y="20" text-anchor="middle" class="pill-text" fill="#a7f3d0">🔍 Trace Capture</text>
+        </g>
+        <g transform="translate(157, 0)">
+          <rect width="145" height="32" rx="8" fill="#022c22" stroke="#34d399" stroke-width="1.5"/>
+          <text x="72" y="20" text-anchor="middle" class="pill-text" fill="#a7f3d0">🔗 Cryptographic Hash</text>
+        </g>
+        <g transform="translate(314, 0)">
+          <rect width="145" height="32" rx="8" fill="#022c22" stroke="#34d399" stroke-width="1.5"/>
+          <text x="72" y="20" text-anchor="middle" class="pill-text" fill="#a7f3d0">📊 Audit Proofs</text>
+        </g>
+      </g>
+    </g>
+    
+</svg>

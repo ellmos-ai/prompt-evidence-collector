@@ -1,3 +1,5 @@
+<img src="assets/banner.png" width="100%" alt="prompt-evidence-collector Banner">
+
 # prompt-evidence-collector
 
 [![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
