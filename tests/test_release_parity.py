@@ -21,3 +21,9 @@ def test_version_source_is_authoritative_across_package_and_manifest():
     assert dynamic == ["version"]
     assert version_attr == "prompt_evidence_collector._version.__version__"
     assert __version__ == source_version == manifest["version"]
+
+
+def test_repository_documentation_uses_portable_relative_links():
+    for name in ("README.md", "README_de.md", "llms.txt"):
+        content = (ROOT / name).read_text(encoding="utf-8")
+        assert "file:///" not in content

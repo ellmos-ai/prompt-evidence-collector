@@ -26,9 +26,9 @@ Test-suite: CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
 
 ## Primary Documentation & References
 
-- [README.md](file:///README.md): Project overview, architecture, security model, and authorized capture workflow.
-- [README_de.md](file:///README_de.md): German documentation and architecture overview.
-- [pyproject.toml](file:///pyproject.toml): Dependencies, package config, and pytest settings.
-- [src/prompt_evidence_collector/collector.py](file:///src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
-- [src/prompt_evidence_collector/authorization.py](file:///src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.
-- [src/prompt_evidence_collector/trust_enrollment.py](file:///src/prompt_evidence_collector/trust_enrollment.py): Public-key-only trust proposal, activation, atomic apply, and pre-capture rollback.
+- [README.md](README.md): Project overview, architecture, security model, and authorized capture workflow.
+- [README_de.md](README_de.md): German documentation and architecture overview.
+- [pyproject.toml](pyproject.toml): Dependencies, package config, and pytest settings.
+- [src/prompt_evidence_collector/collector.py](src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
+- [src/prompt_evidence_collector/authorization.py](src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.
+- [src/prompt_evidence_collector/trust_enrollment.py](src/prompt_evidence_collector/trust_enrollment.py): Public-key-only trust proposal, activation, atomic apply, and pre-capture rollback.

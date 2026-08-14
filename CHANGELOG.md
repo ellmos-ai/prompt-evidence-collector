@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Replaced machine-local `file:///` documentation links with portable relative links.
+
 ### Added
 - Added Doctor v3 inventory/readback for structurally valid receipts, exact
   Raw/pair verification, orphan/temp/reparse/unknown-object counts, and stable

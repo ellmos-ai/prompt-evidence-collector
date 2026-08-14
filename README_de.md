@@ -11,7 +11,7 @@
 [![Dachorganisation](https://img.shields.io/badge/Dach-open--bricks-informational.svg)](https://github.com/open-bricks)
 
 > [!NOTE]
-> **LLM / KI-Kontextdatei verfügbar**: Eine maschinenlesbare Architektur-Zusammenfassung dieses Repositories befindet sich in [`llms.txt`](file:///llms.txt).
+> **LLM / KI-Kontextdatei verfügbar**: Eine maschinenlesbare Architektur-Zusammenfassung dieses Repositories befindet sich in [`llms.txt`](llms.txt).
 
 Eigenständiges, cloud-sicheres Prompt-/Workflow-Evidenz-Modul (aus `ellmos-core` extrahiert).
 
