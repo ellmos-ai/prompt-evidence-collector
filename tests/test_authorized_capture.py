@@ -288,10 +288,24 @@ def install_fake_clutch(monkeypatch, *, raw: str = RAW) -> dict:
 @pytest.fixture
 def authorized_context(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.setattr(
         PromptEvidenceCollector,
         "_known_local_app_data",
+        staticmethod(lambda: tmp_path),
+    )
+    # POSIX counterpart: existing_store_root() trusts _known_native_home(),
+    # not HOME outright, so point both at the same isolated tmp_path the way
+    # the Windows branch points LOCALAPPDATA at _known_local_app_data(). A
+    # bare XDG_DATA_HOME override would fail existing_store_root()'s
+    # redirection check (see test_posix_existing_store_base_rejects_home_and_
+    # xdg_redirection), so leave it unset and let both the write path
+    # (_app_store_root) and the read path (_existing_posix_base) fall back to
+    # HOME/.local/share.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(
+        PromptEvidenceCollector,
+        "_known_native_home",
         staticmethod(lambda: tmp_path),
     )
     collector = PromptEvidenceCollector()

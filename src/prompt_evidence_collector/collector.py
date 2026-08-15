@@ -1507,10 +1507,8 @@ class PromptEvidenceCollector:
                     "LOCALAPPDATA does not match the Windows Known Folder"
                 )
         else:
-            import pwd
-
             base = cls._existing_posix_base(
-                native_home=Path(pwd.getpwuid(os.getuid()).pw_dir),
+                native_home=cls._known_native_home(),
                 configured_home=os.environ.get("HOME"),
                 xdg=os.environ.get("XDG_DATA_HOME"),
             )
@@ -1722,6 +1720,21 @@ class PromptEvidenceCollector:
             return Path(output.value)
         finally:
             ctypes.windll.ole32.CoTaskMemFree(output)
+
+    @staticmethod
+    def _known_native_home() -> Path:
+        """Resolve the OS-registered home directory for the current account.
+
+        POSIX counterpart to ``_known_local_app_data``: a single overridable
+        seam ``existing_store_root`` trusts instead of trusting ``HOME``
+        outright, so tests can substitute an isolated home the same way they
+        substitute the Windows Known Folder.
+        """
+        if os.name == "nt":
+            raise UnsafeEvidenceStoreError("native account home is unavailable")
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
     @staticmethod
     def _current_windows_sid() -> str:
