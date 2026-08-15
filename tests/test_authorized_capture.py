@@ -195,9 +195,11 @@ def write_trust_store(
 ) -> None:
     now = datetime.now(UTC)
     trust_dir = collector.root / "trust"
-    trust_dir.mkdir(mode=0o700, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(trust_dir, 0o700)
+    # Mirror the production trust-enrollment boundary instead of relying on
+    # the pytest temporary root's inherited ACL.  Some Windows runner images
+    # give temp children explicit OWNER RIGHTS / Administrators ACEs, which a
+    # private trust store must reject rather than silently tolerate.
+    PromptEvidenceCollector._prepare_secure_store(trust_dir)
     keys = [
         {
             "key_fingerprint": fingerprint(authority_key),
@@ -563,6 +565,12 @@ def test_trust_store_rejects_non_string_role_without_traceback(
 
 def test_trust_preflight_validates_directory_and_file_security(authorized_context):
     context = authorized_context
+    trust_paths = [
+        context["collector"].root / "trust",
+        context["collector"].root / "trust" / "capture-authorities.v1.json",
+    ]
+    for path in trust_paths:
+        PromptEvidenceCollector._validate_private_store_child(path)
     checked: list[Path] = []
     verifier = CaptureGrantVerifier(
         context["collector"].root,
@@ -570,10 +578,7 @@ def test_trust_preflight_validates_directory_and_file_security(authorized_contex
     )
     report = verifier.preflight_trust_store(now=context["now"])
     assert report["status"] == "valid"
-    assert checked == [
-        context["collector"].root / "trust",
-        context["collector"].root / "trust" / "capture-authorities.v1.json",
-    ]
+    assert checked == trust_paths
 
 
 def test_posix_existing_store_base_rejects_home_and_xdg_redirection(tmp_path):
