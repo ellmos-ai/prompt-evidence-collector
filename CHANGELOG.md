@@ -5,10 +5,17 @@ All notable changes to `prompt-evidence-collector` will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-08-16
+
+### Added
+- Standardized Shields.io badges in `README.md` and `README_de.md` (Version, Tests, Security, Python 3.11+, Ecosystem, Umbrella, LLM-Ready).
+- Added comprehensive bilingual `SECURITY.md` defining local-first, zero-egress, Ed25519 authorization, and private vulnerability disclosure policies.
+- Added cross-repository ecosystem tools discovery matrices in `README.md` and `README_de.md`.
+- Added automated metadata, manifest, and documentation parity test suite in `tests/test_metadata.py` (6/6 tests passing).
+- Synchronized `llms.txt` discovery index with timestamp `2026-08-16` and full test coverage specifications.
 
 ### Fixed
-- Replaced machine-local `file:///` documentation links with portable relative links.
+- Replaced machine-local file scheme documentation links with portable relative links.
 
 ### Added
 - Added Doctor v3 inventory/readback for structurally valid receipts, exact

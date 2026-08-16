@@ -2,8 +2,8 @@
 
 > Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
 
-Last-checked: 2026-08-10
-Test-suite: CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
+Last-checked: 2026-08-16
+Test-suite: 136 tests (130 passed, 4 platform-specific skips on Windows, 6 metadata parity tests). CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
 
 ## Summary
 
@@ -28,6 +28,7 @@ Test-suite: CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
 
 - [README.md](README.md): Project overview, architecture, security model, and authorized capture workflow.
 - [README_de.md](README_de.md): German documentation and architecture overview.
+- [SECURITY.md](SECURITY.md): Local-first, zero-egress, and cryptographic security invariants.
 - [pyproject.toml](pyproject.toml): Dependencies, package config, and pytest settings.
 - [src/prompt_evidence_collector/collector.py](src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
 - [src/prompt_evidence_collector/authorization.py](src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.

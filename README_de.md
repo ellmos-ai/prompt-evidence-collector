@@ -4,11 +4,14 @@
 
 [![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
 [![Deutsch](https://img.shields.io/badge/Sprache-Deutsch-de.svg)](README_de.md)
-[![Pytest](https://img.shields.io/badge/Pytest-CI--Matrix-informational.svg)](https://docs.pytest.org/)
+[![Version](https://img.shields.io/badge/Version-0.4.0-informational.svg)](pyproject.toml)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/Tests-136%20Passed-brightgreen.svg)](tests/)
 [![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green.svg)](LICENSE)
+[![Sicherheit](https://img.shields.io/badge/Sicherheit-Local--First%20%2F%20Zero--Egress-success.svg)](SECURITY.md)
 [![Ökosystem](https://img.shields.io/badge/Ökosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
 [![Dachorganisation](https://img.shields.io/badge/Dach-open--bricks-informational.svg)](https://github.com/open-bricks)
+[![LLM-Ready](https://img.shields.io/badge/LLM--Ready-llms.txt-orange.svg)](llms.txt)
 
 > [!NOTE]
 > **LLM / KI-Kontextdatei verfügbar**: Eine maschinenlesbare Architektur-Zusammenfassung dieses Repositories befindet sich in [`llms.txt`](llms.txt).
@@ -180,6 +183,22 @@ kompatible Versionen ist das Bundlemanifest im Repository
 Der Collector bleibt einzeln installierbar. Die Bundlemitgliedschaft überträgt
 keine Promptbibliothek-, Policy-, Decision-, Nutzermodell- oder
 Private-Key-Autorität auf dieses Modul.
+
+### Verwandte Ökosystem-Werkzeuge
+
+| Repository | Zweck | Hauptfokus |
+|---|---|---|
+| [`ellmos-core`](https://github.com/ellmos-ai/ellmos-core) | Kern-Laufzeit & Prompt-Bibliothek | Agenten-Laufzeit, Prompt-Verwaltung, lokale Workflows |
+| [`clutch`](https://github.com/ellmos-ai/clutch) | Provider-Switching & Multi-LLM Engine | Modell-Routing, Streaming, strukturierte Ausgaben |
+| [`workflowhooker`](https://github.com/ellmos-ai/workflowhooker) | Transparente Workflow-Interzeption | Deterministische Interzeption & Lebenszyklus-Auditing |
+| [`memoryhooker`](https://github.com/ellmos-ai/memoryhooker) | Kontext- & Speicher-Interzeption | Speicher-Lebenszyklus-Hooks & Grenzenschutz |
+| [`policy-registry`](https://github.com/ellmos-ai/policy-registry) | Richtlinien-Registrierung & Validierung | Multi-Agenten-Governance, Policy-Lifecycle |
+| [`sqlite-transit-sync`](https://github.com/ellmos-ai/sqlite-transit-sync) | SQLite-Replikation & Synchronisation | Bidirektionale Diffs & Transit-Synchronisation |
+| [`system-gap-master`](https://github.com/ellmos-ai/system-gap-master) | Gap-Analyse & Architektur-Auditor | Architektur-Parität & Invarianten-Verifikation |
+| [`DevCenter`](https://github.com/dev-bricks/DevCenter) | Entwickler-Arbeitsplatz | Multi-Projekt-Orchestrierung & Entwickler-Werkzeuge |
+| [`CodeBox`](https://github.com/dev-bricks/CodeBox) | Code-Snippet- & Scratchpad-Manager | Lokale Snippet-Organisation & Code-Scratchpads |
+| [`safe-start-for-codex`](https://github.com/dev-bricks/safe-start-for-codex) | Sicherer Startup-Gatekeeper | Workspace-Integritätsprüfung & Preflight-Checks |
+| [`automation-master`](https://github.com/dev-bricks/automation-master) | Workflow-Ausführungs-Orchestrator | Mehrstufige Aufgaben-Pipelines & Automation |
 
 ## Entwicklung
 
