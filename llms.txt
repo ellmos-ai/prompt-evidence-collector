@@ -2,8 +2,8 @@
 
 > Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
 
-Last-checked: 2026-08-16
-Test-suite: 136 tests (130 passed, 4 platform-specific skips on Windows, 6 metadata parity tests). CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
+Last-checked: 2026-08-21
+Test-suite: 143 tests (139 passed, 4 platform-specific skips on Windows, including 9 metadata/public-readiness tests). CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
 
 ## Summary
 
@@ -23,12 +23,15 @@ Test-suite: 136 tests (130 passed, 4 platform-specific skips on Windows, 6 metad
 - **Bundle Binding**: Recommended `capture` component of `ellmos-prompt-workflow-bundle`; the bundle manifest remains authoritative and this module does not own curated prompts, policies, decisions, user models, or private keys.
 - **Passive Default**: No background workers, no schedulers, and zero network calls by default.
 - **CI and Version Parity**: The GitHub Actions matrix runs Ruff, pytest with visible platform skips, and a passive Doctor smoke; `_version.py` is the single package version source and is checked against build metadata and the module manifest.
+- **Public Boundary Documentation**: Bilingual README, security policy, AI Act component note, contribution rules, and third-party license inventory are part of the release contract.
 
 ## Primary Documentation & References
 
 - [README.md](README.md): Project overview, architecture, security model, and authorized capture workflow.
 - [README_de.md](README_de.md): German documentation and architecture overview.
 - [SECURITY.md](SECURITY.md): Local-first, zero-egress, and cryptographic security invariants.
+- [docs/ai-act-note.md](docs/ai-act-note.md): Component/system boundary, intended purpose, excluded high-risk contexts, and transparency note.
+- [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt): Verified runtime dependency and license inventory.
 - [pyproject.toml](pyproject.toml): Dependencies, package config, and pytest settings.
 - [src/prompt_evidence_collector/collector.py](src/prompt_evidence_collector/collector.py): Core evidence collector implementation.
 - [src/prompt_evidence_collector/authorization.py](src/prompt_evidence_collector/authorization.py): Ed25519 authorization, grant verification, and SQLite ledger engine.

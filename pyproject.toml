@@ -10,7 +10,23 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Lukas Geiger" }]
+keywords = ["evidence", "local-first", "prompt", "receipts", "security"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+]
 dependencies = ["cryptography>=43"]
+
+[project.urls]
+Documentation = "https://github.com/ellmos-ai/prompt-evidence-collector#readme"
+Issues = "https://github.com/ellmos-ai/prompt-evidence-collector/issues"
+Repository = "https://github.com/ellmos-ai/prompt-evidence-collector"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]

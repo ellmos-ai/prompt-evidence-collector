@@ -5,6 +5,17 @@ All notable changes to `prompt-evidence-collector` will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Rebuilt the English and German READMEs as structurally parallel public documentation.
+- Replaced private profile and repository names in public-facing descriptions with neutral authority roles.
+- Added package discovery metadata, public operating boundaries, and portable installation and validation examples.
+
+### Added
+- Added `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `THIRD_PARTY_LICENSES.txt`, and a bilingual EU AI Act component note.
+- Added regression checks for required public files, documentation neutrality, README structure/code parity, and private runtime ignore rules.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
@@ -37,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the explicit V2 capture trust-store schema with enforced provider,
   purpose, sensitivity, retention, one-shot, and maximum Grant-TTL constraints.
 - Added atomic no-overwrite publication, restrictive ACL/mode readback, and
-  public-key-only activation artifacts bound to decision `D-20260731-004`.
+  public-key-only activation artifacts bound to the configured bootstrap decision reference.
 - Added strictly read-only `authorization-preflight` and
   `authorization-validate` commands for the canonical private app store.
 - Added a reusable pure authorization validator for trust, signatures, time

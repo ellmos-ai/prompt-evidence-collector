@@ -1,0 +1,21 @@
+prompt-evidence-collector — Third-Party Runtime Dependencies
+Generated/verified: 2026-08-21
+Method: pip-licenses against the declared runtime dependency chain
+
+The project-owned source code and documentation are licensed under MIT.
+The following packages retain their own licenses:
+
+Package       Verified version  License expression              Project
+------------  ----------------  ------------------------------  ----------------------------------------------
+cryptography  50.0.0            Apache-2.0 OR BSD-3-Clause      https://github.com/pyca/cryptography
+cffi          2.0.0             MIT                             https://cffi.readthedocs.io/
+pycparser     3.0               BSD-3-Clause                    https://github.com/eliben/pycparser
+
+`cryptography>=43` is the only direct runtime dependency. `cffi` and
+`pycparser` are transitive dependencies in the verified environment. Resolved
+versions may differ in another installation; consult that environment's
+installed package metadata when redistributing a built artifact.
+
+License texts and notices are available from the linked upstream projects and
+the installed distributions. This inventory does not relicense third-party
+software.
