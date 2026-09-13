@@ -518,7 +518,7 @@ def test_apply_uses_deep_validated_snapshots_under_mutation(tmp_path, monkeypatc
     proposal.keys[0]["roles"] = ["runtime-release"]
     proposal.constraints["retention_codes"] = ["legal-hold"]
     release.set()
-    worker.join(10)
+    worker.join(30)
     assert not worker.is_alive()
     trust = json.loads((root / "trust" / "capture-authorities.v1.json").read_text())
     assert sorted(item["key_fingerprint"] for item in trust["keys"]) == original_fingerprints

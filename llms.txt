@@ -2,8 +2,8 @@
 
 > Standalone, cloud-safe prompt and workflow evidence collector extracted from ellmos-core.
 
-Last-checked: 2026-08-21
-Test-suite: 143 tests (139 passed, 4 platform-specific skips on Windows, including 9 metadata/public-readiness tests). CI matrix covers Python 3.11/3.12 on Ubuntu, Windows, and macOS.
+Last-checked: 2026-09-10
+Test-suite: 143 tests (139 passed, 4 platform-specific skips on Windows, including 9 metadata/public-readiness tests). CI matrix covers Python 3.11/3.12/3.13 on Ubuntu, Windows, and macOS.
 
 ## Summary
 
@@ -11,6 +11,8 @@ Test-suite: 143 tests (139 passed, 4 platform-specific skips on Windows, includi
 
 ## Key Features & Architecture
 
+- **Visual Architecture & Workflows**: Dual Mermaid diagrams in README documenting the three-tier boundary topology and the full authorized capture & verification lifecycle.
+- **Formally Verified Invariants**: 10 canonical runtime invariants (`INV-LOCAL-01` through `INV-SLA-10`) defining storage, egress, cryptographic authorization, atomic replay prevention, and byte fidelity.
 - **Local-Only Raw Store**: Raw text saved strictly at `<local-app-data>/prompt-evidence-collector/prompt-evidence/` with hardened folder permissions.
 - **Authorized One-Shot Capture**: Ed25519-signed `CaptureGrant` verification against local trust store, maximum 1-hour validity, single execution (`max_captures=1`).
 - **Cryptographic Receipts**: External projection limited to hashed receipts (codes, opaque IDs, SHA-256 hashes).

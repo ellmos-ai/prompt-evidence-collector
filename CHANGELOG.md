@@ -7,14 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added dual Mermaid diagrams in `README.md` and `README_de.md`:
+  - `flowchart TD`: System Architecture & Security Boundaries across untrusted client, core engine, and private storage.
+  - `sequenceDiagram`: Authorized Capture & Verification Workflow detailing Ed25519 preflight, SQLite replay lease, and durable pair commit.
+- Added Runtime Invariants reference table (`INV-LOCAL-01` through `INV-SLA-10`) formalizing local-first, zero-egress, and cryptographic boundaries.
+- Added quick navigation jump-bar in English and German documentation.
+- Expanded Shields.io badges (CI Passing, Code Style Ruff, Security SLA 48h Response, Platforms Windows/Linux/macOS).
+- Expanded `[project.urls]` in `pyproject.toml` with Changelog, Security, Parent Organization, and Umbrella Ecosystem.
+- Added local `MARKETING-LOG.txt` outlining discoverability, directory submission strategy, and terminal screencast roadmap.
+- Contract test coverage in `tests/test_metadata.py` verifying Mermaid diagrams, invariant IDs, and `MARKETING-LOG.txt`.
+- Added `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `THIRD_PARTY_LICENSES.txt`, and a bilingual EU AI Act component note.
+- Added regression checks for required public files, documentation neutrality, README structure/code parity, and private runtime ignore rules.
+
 ### Changed
 - Rebuilt the English and German READMEs as structurally parallel public documentation.
 - Replaced private profile and repository names in public-facing descriptions with neutral authority roles.
 - Added package discovery metadata, public operating boundaries, and portable installation and validation examples.
 
-### Added
-- Added `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `THIRD_PARTY_LICENSES.txt`, and a bilingual EU AI Act component note.
-- Added regression checks for required public files, documentation neutrality, README structure/code parity, and private runtime ignore rules.
+### Fixed
+- Stabilized Windows thread join timeout in `tests/test_trust_enrollment.py` (`test_apply_uses_deep_validated_snapshots_under_mutation`) to accommodate multi-step Windows ACL `icacls` validation subprocesses without timing out.
 
 ## [0.4.0] - 2026-08-16
 

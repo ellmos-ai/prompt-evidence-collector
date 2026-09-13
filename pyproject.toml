@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Security",
 ]
 dependencies = ["cryptography>=43"]
@@ -27,6 +28,10 @@ dependencies = ["cryptography>=43"]
 Documentation = "https://github.com/ellmos-ai/prompt-evidence-collector#readme"
 Issues = "https://github.com/ellmos-ai/prompt-evidence-collector/issues"
 Repository = "https://github.com/ellmos-ai/prompt-evidence-collector"
+Changelog = "https://github.com/ellmos-ai/prompt-evidence-collector/blob/master/CHANGELOG.md"
+Security = "https://github.com/ellmos-ai/prompt-evidence-collector/blob/master/SECURITY.md"
+"Parent Organization" = "https://github.com/ellmos-ai"
+"Umbrella Ecosystem" = "https://github.com/open-bricks"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]

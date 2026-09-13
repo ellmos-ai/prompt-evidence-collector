@@ -7,11 +7,26 @@
 [![Version](https://img.shields.io/badge/Version-0.4.0-informational.svg)](pyproject.toml)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/Tests-139%20Passed-brightgreen.svg)](tests/)
+[![CI](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](tests/)
+[![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green.svg)](LICENSE)
 [![Sicherheit](https://img.shields.io/badge/Sicherheit-Local--First%20%2F%20Zero--Egress-success.svg)](SECURITY.md)
+[![Sicherheits-SLA](https://img.shields.io/badge/Sicherheits--SLA-48h%20Response-blueviolet.svg)](SECURITY.md)
+[![Plattformen](https://img.shields.io/badge/Plattformen-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)](pyproject.toml)
 [![Ökosystem](https://img.shields.io/badge/Ökosystem-ellmos--ai-purple.svg)](https://github.com/ellmos-ai)
 [![Dachorganisation](https://img.shields.io/badge/Dach-open--bricks-informational.svg)](https://github.com/open-bricks)
 [![LLM-Ready](https://img.shields.io/badge/LLM--Ready-llms.txt-orange.svg)](llms.txt)
+
+<p align="center">
+  <b><a href="#systemarchitektur-und-sicherheitsgrenzen">Architektur</a></b> •
+  <b><a href="#autorisierter-erfassungs--und-verifikationsablauf">Workflow</a></b> •
+  <b><a href="#laufzeit-invarianten">Invarianten</a></b> •
+  <b><a href="#installation">Installation</a></b> •
+  <b><a href="#autorisierter-one-shot-capture">Schnellstart</a></b> •
+  <b><a href="#schreibgeschützter-autorisierungs-preflight">CLI-Preflight</a></b> •
+  <b><a href="#fail-closed-trust-enrollment">Trust-Enrollment</a></b> •
+  <b><a href="#bundle-und-partner">Ökosystem</a></b>
+</p>
 
 > [!NOTE]
 > **LLM-/KI-Kontextdatei vorhanden:** [`llms.txt`](llms.txt) enthält die
@@ -33,6 +48,88 @@ Bibliothek, Policy oder Nutzerentscheidung übernommen.
 Die Extraktion basiert auf `ellmos-core@03f6f58`. Die ursprüngliche
 Implementierung bleibt bestehen, bis ein eigener, ausdrücklich autorisierter
 Cutover abgeschlossen ist.
+
+## Systemarchitektur und Sicherheitsgrenzen
+
+```mermaid
+flowchart TD
+    subgraph ClientLayer ["Untrusted Client Layer"]
+        CLI["CLI / Host Application"]
+        GrantDoc["Signed CaptureGrant (JSON)"]
+        ReceiptDoc["Resolver Runtime Receipt (JSON)"]
+    end
+
+    subgraph CoreEngine ["Prompt Evidence Collector (Core Engine)"]
+        Preflight["Authorization Preflight & Path Guard"]
+        GrantVerifier["CaptureGrantVerifier (Ed25519)"]
+        TrustStore["Private Trust Store (V2 Schema)"]
+        ReplayLedger["Replay Ledger (SQLite Atomic Lease)"]
+        RawCapture["Durable Pair Raw Capturer"]
+        PromotionEngine["PromotionGate Verifier"]
+    end
+
+    subgraph StorageBoundary ["Hardened Local Storage (Private ACL / 0700)"]
+        RawDir[("Raw Content Objects (UTF-8 Strict)")]
+        ReceiptDir[("Evidence Receipts (Hash-Only Manifest)")]
+        AuditDir[("Promotion Audit Receipts")]
+    end
+
+    CLI -->|"Submit Locator & Signed Docs"| Preflight
+    GrantDoc -.->|"Grant Payload"| GrantVerifier
+    ReceiptDoc -.->|"Runtime Metadata"| GrantVerifier
+    Preflight -->|"Validate Storage & Boundaries"| TrustStore
+    TrustStore -->|"Public Key Fingerprints"| GrantVerifier
+    GrantVerifier -->|"Reserve One-Shot Lease"| ReplayLedger
+    ReplayLedger -->|"Lease Confirmed"| RawCapture
+    RawCapture -->|"Atomic No-Overwrite Write"| RawDir
+    RawCapture -->|"Emit Hash-Only Receipt"| ReceiptDir
+    PromotionEngine -->|"Validate Gate & Authority"| AuditDir
+```
+
+## Autorisierter Erfassungs- und Verifikationsablauf
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as "Caller / Client"
+    participant Collector as "PromptEvidenceCollector"
+    participant Verifier as "CaptureGrantVerifier"
+    participant Trust as "Private Trust Store"
+    participant Ledger as "Replay Ledger (SQLite)"
+    participant Resolver as "Internal Clutch Resolver"
+    participant Disk as "Durable Private Storage"
+
+    Caller->>Collector: "authorize_and_capture_from_locator(locator, grant, receipt)"
+    Collector->>Verifier: "validate_signed_authorization(grant, receipt)"
+    Verifier->>Trust: "verify_signature_and_scope(Ed25519)"
+    Trust-->>Verifier: "authorization_valid(key_fingerprint)"
+    Verifier->>Ledger: "reserve_one_shot_lease(grant_id, max_captures=1)"
+    Ledger-->>Verifier: "lease_reserved(status='prepared')"
+    Verifier-->>Collector: "authorization_preflight_cleared"
+    Collector->>Resolver: "resolve_locator_content(bound_hash)"
+    Resolver-->>Collector: "raw_utf8_bytes"
+    Collector->>Disk: "atomic_publish_pair(raw_object, hash_receipt)"
+    Disk-->>Collector: "pair_committed(manifest_valid)"
+    Collector->>Ledger: "finalize_lease(status='consumed')"
+    Collector-->>Caller: "EvidenceReceipt(opaque_id, content_hash, not-reviewed)"
+```
+
+## Laufzeit-Invarianten
+
+Die folgenden Invarianten werden über alle Betriebspfade hinweg formal geprüft und durchgesetzt:
+
+| Invarianten-ID | Bereich | Durchsetzungsmechanismus | Fehlerverhalten |
+|---|---|---|---|
+| `INV-LOCAL-01` | Speicher-Privatsphäre | Rohtext verbleibt strikt im privaten App-Verzeichnis; externe Ausgaben sind reine Hash-Receipts | Fail-closed (`UnsafeEvidenceStoreError`) |
+| `INV-LOCAL-02` | Egress-Isolation | Standardmäßig passiv: null Hintergrunddienste, null Scheduler, null Netzwerkzugriffe | Passive Architektur-Garantie |
+| `INV-AUTH-03` | Autorisierung | Einmalige Erfassung (`max_captures=1`), max. 1 Stunde Gültigkeitsdauer, Ed25519-Signaturprüfung | `CaptureAuthorizationError` |
+| `INV-AUTH-04` | Scope-Bindung | Exakte Übereinstimmung von Provider, Locator, Content-SHA-256, Zweck, Sensitivität und Retention | `CaptureAuthorizationError` |
+| `INV-REPLAY-05` | Replay-Schutz | Atomares SQLite-Ledger mit zweiphasiger Lease-Reservierung (`prepared` $\to$ `consumed` / `failed`) | Terminale Ablehnung bei Duplikaten |
+| `INV-PAIR-06` | Crash-Sicherheit | Dauerhaftes Paarprotokoll: Rohtext und Receipt atomar ohne Überschreiben geschrieben | `EvidenceIntegrityError` |
+| `INV-GATE-07` | Status-Promotion | Begrenzte Übergänge (`not-reviewed -> candidate/rejected`, `candidate -> curated/rejected`) via `PromotionGate` | `PromotionGateError` |
+| `INV-BYTE-08` | Byte-Genauigkeit | Exakte UTF-8-Byte-Prüfung ohne Zeilenumbruch-Normalisierung (LF, CRLF byte-identisch) | `EvidenceIntegrityError` |
+| `INV-TRUST-09` | Trust-Enrollment | Deterministischer Read-only-`plan` und Ed25519-gebundenes `apply` gegen Bootstrap-Autorität | `TrustEnrollmentError` |
+| `INV-SLA-10` | Schwachstellen-SLA | 48-Stunden-Reaktions-SLA und 5-Werktage-Triage-Zusage gemäß Sicherheitsrichtlinie | Definiert in `SECURITY.md` |
 
 ## Installation
 
