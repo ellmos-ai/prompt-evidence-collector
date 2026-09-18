@@ -34,7 +34,6 @@ def test_documentation_links_and_no_file_uris():
         "llms.txt",
         "SECURITY.md",
         "CHANGELOG.md",
-        "TODO.md",
         "CODE_OF_CONDUCT.md",
         "CONTRIBUTING.md",
         "docs/ai-act-note.md",
@@ -125,7 +124,6 @@ def test_public_documentation_is_neutral_and_complete():
         "CODE_OF_CONDUCT.md",
         "CONTRIBUTING.md",
         "THIRD_PARTY_LICENSES.txt",
-        "TODO.md",
         "docs/ai-act-note.md",
     }
     assert all((ROOT / name).is_file() for name in required)
