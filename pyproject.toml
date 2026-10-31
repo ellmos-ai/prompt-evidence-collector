@@ -9,6 +9,7 @@ description = "Standalone, cloud-safe prompt/workflow evidence collector (local-
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES.txt"]
 authors = [{ name = "Lukas Geiger" }]
 keywords = ["evidence", "local-first", "prompt", "receipts", "security"]
 classifiers = [
@@ -46,9 +47,18 @@ where = ["src"]
 version = {attr = "prompt_evidence_collector._version.__version__"}
 
 [tool.pytest.ini_options]
+minversion = "8.0"
 addopts = "-q"
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["prompt_evidence_collector"]

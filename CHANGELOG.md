@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Expanded CI test matrix in `.github/workflows/ci.yml` to test Python 3.13 across Ubuntu, Windows, and macOS runners.
+- Added CI matrix parity contract test (`test_ci_matrix_parity`) in `tests/test_metadata.py`.
+- Added PEP 639 `license-files = ["LICENSE", "THIRD_PARTY_LICENSES.txt"]` metadata declaration in `pyproject.toml`.
+- Added `MARKETING-LOG.txt` ignore pattern to `.gitignore` and enforced via `test_gitignore_covers_private_runtime_and_work_files`.
 - Added dual Mermaid diagrams in `README.md` and `README_de.md`:
   - `flowchart TD`: System Architecture & Security Boundaries across untrusted client, core engine, and private storage.
   - `sequenceDiagram`: Authorized Capture & Verification Workflow detailing Ed25519 preflight, SQLite replay lease, and durable pair commit.
@@ -15,12 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added quick navigation jump-bar in English and German documentation.
 - Expanded Shields.io badges (CI Passing, Code Style Ruff, Security SLA 48h Response, Platforms Windows/Linux/macOS).
 - Expanded `[project.urls]` in `pyproject.toml` with Changelog, Security, Parent Organization, and Umbrella Ecosystem.
-- Added local `MARKETING-LOG.txt` outlining discoverability, directory submission strategy, and terminal screencast roadmap.
-- Contract test coverage in `tests/test_metadata.py` verifying Mermaid diagrams, invariant IDs, and `MARKETING-LOG.txt`.
 - Added `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `THIRD_PARTY_LICENSES.txt`, and a bilingual EU AI Act component note.
 - Added regression checks for required public files, documentation neutrality, README structure/code parity, and private runtime ignore rules.
 
 ### Changed
+- Standardized Ruff linter configuration with explicit rule selection (`E`, `F`, `I`, `W`) and first-party isort definition in `pyproject.toml`.
+- Configured `asyncio_default_fixture_loop_scope = "function"` in `[tool.pytest.ini_options]` to resolve pytest-asyncio deprecation warnings.
 - Rebuilt the English and German READMEs as structurally parallel public documentation.
 - Replaced private profile and repository names in public-facing descriptions with neutral authority roles.
 - Added package discovery metadata, public operating boundaries, and portable installation and validation examples.
