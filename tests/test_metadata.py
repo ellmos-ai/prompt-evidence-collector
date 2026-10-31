@@ -158,5 +158,17 @@ def test_gitignore_covers_private_runtime_and_work_files():
         "*.pem",
         "*.pyc",
         "data/",
+        "MARKETING-LOG.txt",
     ):
         assert required in patterns
+
+
+def test_ci_matrix_parity():
+    """Verify CI workflow tests all supported platforms and Python versions (including 3.13)."""
+    ci_path = ROOT / ".github" / "workflows" / "ci.yml"
+    assert ci_path.is_file(), "Expected .github/workflows/ci.yml to exist"
+    content = ci_path.read_text(encoding="utf-8")
+    for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+        assert os_name in content, f"Expected {os_name} in CI matrix"
+    for py_ver in ('"3.11"', '"3.12"', '"3.13"'):
+        assert py_ver in content, f"Expected Python {py_ver} in CI matrix"
